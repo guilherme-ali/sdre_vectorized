@@ -10,12 +10,12 @@ const float Ir = 0.0001;   // Momento de inércia do conjunto do motor e hélice
 const float m = 1.0;   // Massa do corpo rígido
 const float g = 9.81;  // Aceleração gravitacional
 const float l = 0.5;   // Distância do centro de massa até o ponto de aplicação da força
-const float p = 62;   // velocidade angular em torno do eixo x
-const float q = 62;   // velocidade angular em torno do eixo y
-const float r = 62;   // velocidade angular em torno do eixo z
-const float omega_r = 1000; // velocidade angular do motor
+const float p = 62;   // Velocidade angular em torno do eixo x
+const float q = 62;   // Velocidade angular em torno do eixo y
+const float r = 62;   // Velocidade angular em torno do eixo z
+const float omega_r = 1000; // Velocidade angular do motor
 
-// System matrices
+// Matrizes do sistema
 float A[STATE_SIZE * STATE_SIZE] = {
     0, 0, 0, 1, 0, 0,
     0, 0, 0, 0, 1, 0,
@@ -34,7 +34,7 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 0, 1/Izz
 };
 
-// Cost matrices for normal operation
+// Matrizes de custo para operação normal
 float Q[STATE_SIZE * STATE_SIZE] = {
     1, 0, 0, 0, 0, 0,
     0, 1, 0, 0, 0, 0,
@@ -50,19 +50,19 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
     0, 0, 1,
 };
 
-// Controller and state variables
+// Controlador e variáveis de estado
 AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
 
 void setup()
 {
     Serial.begin(115200);
 
-    // Initialize controller with system dynamics
+    // Inicializa o controlador com a dinâmica do sistema
     controller.setStateMatrix(A);
     controller.setInputMatrix(B);
     controller.setCostMatrices(Q, R);
 
-    // Compute optimal gains
+    // Calcula os ganhos ótimos
     unsigned long startTime = micros(); // Captura o tempo inicial
     
     if (controller.computeGains()) {
@@ -76,12 +76,12 @@ void setup()
         Serial.print(executionTime / 1000.0, 6);
         Serial.println(" ms");
         
-        Serial.println("LQR gains computed successfully");
+        Serial.println("Ganhos do LQR calculados com sucesso");
 
-        // Export the computed gains
+        // Exporta os ganhos calculados
         float exportedGains[CONTROL_SIZE * STATE_SIZE];
         controller.exportGains(exportedGains);
-        Serial.println("Exported Gains:");
+        Serial.println("Ganhos Exportados:");
         for (int i = 0; i < CONTROL_SIZE; i++) {
             for (int j = 0; j < STATE_SIZE; j++) {
                 Serial.print(exportedGains[i * STATE_SIZE + j], 6);
@@ -91,7 +91,7 @@ void setup()
         }
 
     } else {
-        Serial.println("Failed to compute LQR gains");
+        Serial.println("Falha ao calcular os ganhos do LQR");
     }
 }
 
