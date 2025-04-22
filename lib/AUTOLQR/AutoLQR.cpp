@@ -234,15 +234,27 @@ bool AutoLQR::computeGainMatrix()
     float* temp4 = new float[stateSize * stateSize]();
     float* temp5 = new float[stateSize * stateSize]();
 
-    // Initialize P as Q
-    memcpy(P, Q, sizeof(float) * stateSize * stateSize);
+    // Check if P has been initialized with non-zero values
+    bool isPInitialized = false;
+    for (int i = 0; i < stateSize * stateSize; i++) {
+        if (fabs(P[i]) > 1e-6) {
+            isPInitialized = true;
+            break;
+        }
+    }
+
+    // Initialize P as Q only if P hasn't been calculated before
+    if (!isPInitialized) {
+        memcpy(P, Q, sizeof(float) * stateSize * stateSize);
+    }
+    // Otherwise, keep using the previously calculated P
 
     // Compute B transpose and A transpose
     transposeMatrix(B, BT, stateSize, controlSize);
     transposeMatrix(A, AT, stateSize, stateSize);
 
     // Iterate to solve DARE: P = A'PA - A'PB(R + B'PB)^(-1)B'PA + Q
-    const int maxIterations = 100; // Increased from 50
+    const int maxIterations = 100000; // Increased from 50
     const float tolerance = 1e-3; // Tighter tolerance
 
     for (int iter = 0; iter < maxIterations; iter++) {
