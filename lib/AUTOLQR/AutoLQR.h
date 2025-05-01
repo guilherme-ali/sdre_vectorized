@@ -102,6 +102,19 @@ public:
      */
     float calculateExpectedCost();
 
+    /**
+     * @brief Compute Kr gains
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixKr();
+
+    /**
+     * @brief Export Kr gains to external array
+     * @param exportedKr Pointer to destination array
+     * @return true if successful, false otherwise
+     */
+    bool exportKr(float* exportedKr);
+
 private:
     int stateSize; ///< Number of state variables
     int controlSize; ///< Number of control inputs
@@ -113,6 +126,7 @@ private:
     float* K; ///< Control gain matrix
     float* state; ///< Current state
     float* P; ///< Riccati equation solution
+    float* Kr; ///< Kr gain matrix
 
     // Helper functions
 

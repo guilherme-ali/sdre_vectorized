@@ -11,6 +11,7 @@ AutoLQR::AutoLQR(int stateSize, int controlSize)
     , K(nullptr)
     , state(nullptr)
     , P(nullptr)
+    , Kr(nullptr)
 {
     if (stateSize > 0 && controlSize > 0) {
         A = new float[stateSize * stateSize]();
@@ -20,6 +21,7 @@ AutoLQR::AutoLQR(int stateSize, int controlSize)
         K = new float[controlSize * stateSize]();
         state = new float[stateSize]();
         P = new float[stateSize * stateSize]();
+        Kr = new float[controlSize * controlSize]();
     }
 }
 
@@ -32,6 +34,7 @@ AutoLQR::~AutoLQR()
     delete[] K;
     delete[] state;
     delete[] P;
+    delete[] Kr;
 }
 
 bool AutoLQR::setStateMatrix(const float* inputA)
@@ -68,7 +71,12 @@ void AutoLQR::setGains(const float* inputK)
 
 bool AutoLQR::computeGains()
 {
-    return computeGainMatrix();
+    bool K_flag = computeGainMatrix();
+    if (!K_flag)
+        return false;
+        
+    bool Kr_flag = computeGainMatrixKr();
+    return Kr_flag;
 }
 
 void AutoLQR::updateState(const float* currentState)
@@ -351,6 +359,99 @@ bool AutoLQR::computeGainMatrix()
     delete[] temp4;
     delete[] temp5;
 
+    return true;
+}
+
+bool AutoLQR::computeGainMatrixKr()
+{
+    // Primeiro, certifique-se de que os ganhos K foram calculados
+    if (!K) {
+        return false;
+    }
+
+    float* I_minus_A = new float[stateSize * stateSize]();
+    float* BK = new float[stateSize * stateSize]();
+    float* I_minus_A_minus_BK = new float[stateSize * stateSize]();
+    float* inv_I_minus_A_minus_BK = new float[stateSize * stateSize]();
+    float* inv_times_B = new float[stateSize * controlSize]();
+    float* C_times_inv_times_B = new float[controlSize * controlSize]();
+    
+    // Criar matriz identidade menos A
+    for (int i = 0; i < stateSize; i++) {
+        for (int j = 0; j < stateSize; j++) {
+            if (i == j) {
+                I_minus_A[i * stateSize + j] = 1.0f - A[i * stateSize + j];
+            } else {
+                I_minus_A[i * stateSize + j] = -A[i * stateSize + j];
+            }
+        }
+    }
+    
+    // Calcular BK
+    matrixMultiply(B, K, BK, stateSize, controlSize, stateSize);
+    
+    // Calcular (I-A-BK)
+    for (int i = 0; i < stateSize * stateSize; i++) {
+        I_minus_A_minus_BK[i] = I_minus_A[i] - BK[i];
+    }
+    
+    // Inverter (I-A-BK)
+    if (!invertMatrix(I_minus_A_minus_BK, inv_I_minus_A_minus_BK, stateSize)) {
+        // Limpeza de memória
+        delete[] I_minus_A;
+        delete[] BK;
+        delete[] I_minus_A_minus_BK;
+        delete[] inv_I_minus_A_minus_BK;
+        delete[] inv_times_B;
+        delete[] C_times_inv_times_B;
+        return false;
+    }
+    
+    // Calcular (I-A-BK)^(-1)*B
+    matrixMultiply(inv_I_minus_A_minus_BK, B, inv_times_B, stateSize, stateSize, controlSize);
+    
+    // Criando uma matriz C (assumindo identidade nos primeiros estados)
+    float* C = new float[controlSize * stateSize]();
+    for (int i = 0; i < controlSize; i++) {
+        if (i < stateSize) {
+            C[i * stateSize + i] = 1.0f;
+        }
+    }
+    
+    // Calculando C*(I-A-BK)^(-1)*B
+    matrixMultiply(C, inv_times_B, C_times_inv_times_B, controlSize, stateSize, controlSize);
+    
+    // Inverter para obter Kr
+    if (!invertMatrix(C_times_inv_times_B, Kr, controlSize)) {
+        // Limpeza de memória
+        delete[] I_minus_A;
+        delete[] BK;
+        delete[] I_minus_A_minus_BK;
+        delete[] inv_I_minus_A_minus_BK;
+        delete[] inv_times_B;
+        delete[] C_times_inv_times_B;
+        delete[] C;
+        return false;
+    }
+    
+    // Limpeza de memória
+    delete[] I_minus_A;
+    delete[] BK;
+    delete[] I_minus_A_minus_BK;
+    delete[] inv_I_minus_A_minus_BK;
+    delete[] inv_times_B;
+    delete[] C_times_inv_times_B;
+    delete[] C;
+    
+    return true;
+}
+
+bool AutoLQR::exportKr(float* exportedKr)
+{
+    if (!Kr || !exportedKr)
+        return false;
+    
+    memcpy(exportedKr, Kr, sizeof(float) * controlSize * controlSize);
     return true;
 }
 

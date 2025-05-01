@@ -84,6 +84,7 @@ void setup()
     // Parâmetros para discretização
     float samplingTime = 0.001; // Tempo de amostragem em segundos
 
+    // Discretiza a matriz B
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < CONTROL_SIZE; j++) {
             Bd[i * CONTROL_SIZE + j] = B[i * CONTROL_SIZE + j] * samplingTime;
@@ -106,7 +107,8 @@ void loop(){
     float p = IMU.getGyroX_rads();
     float q = IMU.getGyroY_rads(); 
     float r = IMU.getGyroZ_rads(); 
-    updateSystemMatrix(p, q, r);  
+    //updateSystemMatrix(p, q, r);  
+    updateSystemMatrix(0, 0, 0);  
 
     // Calcula os ganhos ótimos
     controller.computeGains();
@@ -125,6 +127,10 @@ void loop(){
     Serial.print(",");
     Serial.print("Tempo_Maximo:");
     Serial.println(max_exectuion_time);
+
+    printGains();
+
+    delay(1000); // Aguarda 1 segundo para a próxima iteração
 
     /*
     printGains();
@@ -174,13 +180,28 @@ void printGains(){
     // Exporta os ganhos calculados
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
     controller.exportGains(exportedGains);
-    Serial.println("Ganhos Exportados:");
+    Serial.println("Ganhos Exportados (K):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
             Serial.print(exportedGains[i * STATE_SIZE + j], 6);
             Serial.print(" ");
         }
         Serial.println();
+    }
+    
+    // Exporta e imprime a matriz Kr
+    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
+    if (controller.exportKr(exportedKr)) {
+        Serial.println("Matriz Kr (ganho de referência):");
+        for (int i = 0; i < CONTROL_SIZE; i++) {
+            for (int j = 0; j < CONTROL_SIZE; j++) {
+                Serial.print(exportedKr[i * CONTROL_SIZE + j], 6);
+                Serial.print(" ");
+            }
+            Serial.println();
+        }
+    } else {
+        Serial.println("Não foi possível exportar a matriz Kr");
     }
 }
 
