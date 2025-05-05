@@ -7,7 +7,7 @@
 unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
 
 void updateSystemMatrix(float p, float q, float r);
-void printGains();
+void printGains(float* K, float* Kr);
 void displayIMU();
 
 const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
@@ -82,7 +82,7 @@ void setup()
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
 
     // Parâmetros para discretização
-    float samplingTime = 0.001; // Tempo de amostragem em segundos
+    float samplingTime = 0.01; // Tempo de amostragem em segundos
 
     // Discretiza a matriz B
     for (int i = 0; i < STATE_SIZE; i++) {
@@ -107,17 +107,23 @@ void loop(){
     float p = IMU.getGyroX_rads();
     float q = IMU.getGyroY_rads(); 
     float r = IMU.getGyroZ_rads(); 
-    //updateSystemMatrix(p, q, r);  
-    updateSystemMatrix(0, 0, 0);  
+    updateSystemMatrix(p, q, r);  
+    //updateSystemMatrix(0, 0, 0);  
 
     // Calcula os ganhos ótimos
     controller.computeGains();
+
+    float exportedGains[CONTROL_SIZE * STATE_SIZE];
+    controller.exportGains(exportedGains);
+
+    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
+    controller.exportKr(exportedKr);
 
     unsigned long endTime = micros(); // Captura o tempo final
     unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
 
 
-    if (executionTime > max_exectuion_time & executionTime < 500000) {
+    if (executionTime > max_exectuion_time & executionTime < 50000) {
         max_exectuion_time = executionTime;
     }
     
@@ -128,12 +134,12 @@ void loop(){
     Serial.print("Tempo_Maximo:");
     Serial.println(max_exectuion_time);
 
-    printGains();
+    printGains(exportedGains, exportedKr);
 
     delay(1000); // Aguarda 1 segundo para a próxima iteração
 
     /*
-    printGains();
+    printGains(exportedGains, exportedKr);
         
     displayIMU();
     */
@@ -158,7 +164,7 @@ void updateSystemMatrix(float p, float q, float r) {
     A[5 * STATE_SIZE + 4] = ((Ixx - Iyy) / (2 * Izz)) * p;
     
     // Discretize the updated A matrix
-    float samplingTime = 0.001; // Same sampling time as in setup()
+    float samplingTime = 0.01; // Same sampling time as in setup()
     
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
@@ -174,34 +180,28 @@ void updateSystemMatrix(float p, float q, float r) {
     controller.setStateMatrix(Ad);
 }
 
-void printGains(){
+void printGains(float* K, float* Kr){
     Serial.println("Ganhos do LQR calculados com sucesso");
 
     // Exporta os ganhos calculados
-    float exportedGains[CONTROL_SIZE * STATE_SIZE];
-    controller.exportGains(exportedGains);
     Serial.println("Ganhos Exportados (K):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
-            Serial.print(exportedGains[i * STATE_SIZE + j], 6);
+            Serial.print(K[i * STATE_SIZE + j], 6);
             Serial.print(" ");
         }
         Serial.println();
     }
     
     // Exporta e imprime a matriz Kr
-    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
-    if (controller.exportKr(exportedKr)) {
-        Serial.println("Matriz Kr (ganho de referência):");
-        for (int i = 0; i < CONTROL_SIZE; i++) {
-            for (int j = 0; j < CONTROL_SIZE; j++) {
-                Serial.print(exportedKr[i * CONTROL_SIZE + j], 6);
-                Serial.print(" ");
-            }
-            Serial.println();
+
+    Serial.println("Matriz Kr (ganho de referência):");
+    for (int i = 0; i < CONTROL_SIZE; i++) {
+        for (int j = 0; j < CONTROL_SIZE; j++) {
+            Serial.print(Kr[i * CONTROL_SIZE + j], 6);
+            Serial.print(" ");
         }
-    } else {
-        Serial.println("Não foi possível exportar a matriz Kr");
+        Serial.println();
     }
 }
 

@@ -74,7 +74,8 @@ bool AutoLQR::computeGains()
     bool K_flag = computeGainMatrix();
     if (!K_flag)
         return false;
-        
+    
+
     bool Kr_flag = computeGainMatrixKr();
     return Kr_flag;
 }
@@ -199,8 +200,74 @@ bool AutoLQR::invertMatrix(const float* matrix, float* result, int n)
 
         return true;
     }
-
-    // For larger matrices, use a different method or precompute
+    else if (n == 6) {
+        // Create augmented matrix [A|I]
+        float* augmented = new float[6 * 12]();
+        
+        // Initialize augmented matrix with [A|I]
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                augmented[i * 12 + j] = matrix[i * 6 + j];
+            }
+            // Add identity matrix part
+            augmented[i * 12 + (i + 6)] = 1.0f;
+        }
+        
+        // Perform Gauss-Jordan elimination
+        for (int i = 0; i < 6; i++) {
+            // Find pivot
+            float maxVal = fabs(augmented[i * 12 + i]);
+            int maxRow = i;
+            for (int j = i + 1; j < 6; j++) {
+                if (fabs(augmented[j * 12 + i]) > maxVal) {
+                    maxVal = fabs(augmented[j * 12 + i]);
+                    maxRow = j;
+                }
+            }
+            
+            // Check for singular matrix
+            if (maxVal < 1e-6) {
+                delete[] augmented;
+                return false;
+            }
+                
+            // Swap rows if needed
+            if (maxRow != i) {
+                for (int j = 0; j < 12; j++) {
+                    float temp = augmented[i * 12 + j];
+                    augmented[i * 12 + j] = augmented[maxRow * 12 + j];
+                    augmented[maxRow * 12 + j] = temp;
+                }
+            }
+            
+            // Scale row so pivot is 1
+            float pivotVal = augmented[i * 12 + i];
+            for (int j = 0; j < 12; j++) {
+                augmented[i * 12 + j] /= pivotVal;
+            }
+            
+            // Eliminate other rows
+            for (int j = 0; j < 6; j++) {
+                if (j != i) {
+                    float factor = augmented[j * 12 + i];
+                    for (int k = 0; k < 12; k++) {
+                        augmented[j * 12 + k] -= factor * augmented[i * 12 + k];
+                    }
+                }
+            }
+        }
+        
+        // Extract inverse from augmented matrix
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                result[i * 6 + j] = augmented[i * 12 + (j + 6)];
+            }
+        }
+        
+        delete[] augmented;
+        return true;
+    }
+    Serial.println("Tamanho da matriz não suportado para inversão.");
     return false;
 }
 
@@ -404,6 +471,7 @@ bool AutoLQR::computeGainMatrixKr()
         delete[] inv_I_minus_A_minus_BK;
         delete[] inv_times_B;
         delete[] C_times_inv_times_B;
+        Serial.println("Falha ao inverter (I-A-BK)");
         return false;
     }
     
