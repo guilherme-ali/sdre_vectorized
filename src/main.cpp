@@ -1,5 +1,6 @@
 #include <AutoLQR.h>
 #include "MPU9250.h"
+#include <MadgwickAHRS.h>
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -16,8 +17,15 @@ const float Izz = 0.00338;  // Momento de inércia em torno do eixo z
 const float Ir = 0.00001;   // Momento de inércia do conjunto do motor e hélice
 float omega_r = 2500; // Velocidade angular do motor
 
+// Variáveis para armazenar dados do sensor
+float ax, ay, az; // Acelerômetro (g)
+float gx, gy, gz; // Giroscópio (rad/s)
+float mx, my, mz; // Magnetômetro (uT)
+
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
+
+unsigned long prev_ms = micros();
 
 // Matrizes do sistema
 float A[STATE_SIZE * STATE_SIZE] = {
@@ -58,6 +66,7 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
 AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
 
 MPU9250 IMU(SPI, 5);
+Madgwick filter;
 int status;
 
 void setup()
@@ -81,6 +90,15 @@ void setup()
     // setting DLPF bandwidth to 20 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
 
+    /*
+    Serial.println("Calibrando acelerometro");
+    IMU.calibrateAccel();
+    Serial.println("Calibrando giroscopio");
+    IMU.calibrateGyro();
+    Serial.println("Calibrando magnetometro");
+    IMU.calibrateMag();
+    */
+
     // Parâmetros para discretização
     float samplingTime = 0.01; // Tempo de amostragem em segundos
 
@@ -95,6 +113,8 @@ void setup()
     updateSystemMatrix(0, 0, 0); // Atualiza a matriz do sistema com os valores iniciais
     controller.setInputMatrix(Bd);
     controller.setCostMatrices(Q, R);
+
+    filter.begin(1.0f/samplingTime);
 }
 
 void loop(){
@@ -103,11 +123,28 @@ void loop(){
 
     IMU.readSensor();
 
-    // Atualiza a matriz do sistema com os valores atuais
-    float p = IMU.getGyroX_rads();
-    float q = IMU.getGyroY_rads(); 
-    float r = IMU.getGyroZ_rads(); 
-    updateSystemMatrix(p, q, r);  
+    // Converte os dados para unidades adequadas
+    ax = IMU.getAccelX_mss() / 9.81; // m/s² para g
+    ay = IMU.getAccelY_mss() / 9.81;
+    az = -IMU.getAccelZ_mss() / 9.81;
+
+    gx = IMU.getGyroX_rads(); // Já em rad/s
+    gy = IMU.getGyroY_rads();
+    gz = IMU.getGyroZ_rads();
+
+    mx = IMU.getMagX_uT(); // Magnetômetro em µT
+    my = IMU.getMagY_uT();
+    mz = IMU.getMagZ_uT();
+
+    // Atualiza o filtro de Madgwick
+    filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
+
+    // Obtém os ângulos de Euler (em graus)
+    float roll = filter.getRoll();
+    float pitch = filter.getPitch();
+    float yaw = filter.getYaw();
+
+    updateSystemMatrix(gx, gy, gz);  
     //updateSystemMatrix(0, 0, 0);  
 
     // Calcula os ganhos ótimos
@@ -122,29 +159,29 @@ void loop(){
     unsigned long endTime = micros(); // Captura o tempo final
     unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
 
-
     if (executionTime > max_exectuion_time & executionTime < 50000) {
         max_exectuion_time = executionTime;
     }
     
+    if(micros() >= prev_ms + 1000000){
+        Serial.print("Tempo_execucao:");
+        Serial.println(executionTime);
+        Serial.print(",");
+        Serial.print("Tempo_Maximo:");
+        Serial.println(max_exectuion_time);
     
-    Serial.print("Tempo_execucao:");
-    Serial.println(executionTime);
-    Serial.print(",");
-    Serial.print("Tempo_Maximo:");
-    Serial.println(max_exectuion_time);
+        // Exibe os resultados
+        Serial.print("Roll: "); Serial.print(roll);
+        Serial.print(" | Pitch: "); Serial.print(pitch);
+        Serial.print(" | Yaw: "); Serial.println(yaw);
+    
+        //printGains(exportedGains, exportedKr);
+            
+        //displayIMU();
 
-    printGains(exportedGains, exportedKr);
+        prev_ms = micros();
 
-    delay(1000); // Aguarda 1 segundo para a próxima iteração
-
-    /*
-    printGains(exportedGains, exportedKr);
-        
-    displayIMU();
-    */
-
-
+    }
 }
 
 void updateSystemMatrix(float p, float q, float r) {
