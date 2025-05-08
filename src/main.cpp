@@ -6,6 +6,8 @@
 #define CONTROL_SIZE 3
 
 unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
+unsigned long total_execution_time = 0; // Tempo total de execução
+unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
 void printGains(float* K, float* Kr);
@@ -164,23 +166,35 @@ void loop(){
     unsigned long endTime = micros(); // Captura o tempo final
     unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
 
+    // Update max execution time
     if (executionTime > max_exectuion_time & executionTime < 50000) {
         max_exectuion_time = executionTime;
     }
     
+    // Update total execution time and count for average calculation
+    total_execution_time += executionTime;
+    execution_count++;
+    
     if(micros() >= prev_ms + 1000000){
+        // Calculate average execution time
+        float avg_execution_time = (execution_count > 0) ? 
+                                  (float)total_execution_time / execution_count : 0;
+        
         Serial.print("Tempo_execucao:");
         Serial.println(executionTime);
-        Serial.print(",");
         Serial.print("Tempo_Maximo:");
         Serial.println(max_exectuion_time);
+        Serial.print("Tempo_Medio:");
+        Serial.println(avg_execution_time);
     
+        /*
         // Exibe os resultados
         Serial.print("Roll: "); Serial.print(filter.getRoll());
         Serial.print(" | Pitch: "); Serial.print(filter.getPitch());
         Serial.print(" | Yaw: "); Serial.println(filter.getYaw());
+        */
     
-        //printGains(exportedGains, exportedKr);
+        printGains(exportedGains, exportedKr);
             
         //displayIMU();
 
@@ -192,15 +206,21 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     // Update the continuous-time A matrix with current angular velocities
     // The first 3 rows remain constant
 
+    float sin_roll = sin(roll);
+    float cos_roll = cos(roll);
+    float cos_pitch = cos(pitch);
+    float tan_pitch = tan(pitch);
+    float inv_cos_pitch = 1.0f / cos_pitch;
+    
     A[0 * STATE_SIZE + 3] = 1;
-    A[0 * STATE_SIZE + 4] = sin(roll)*tan(pitch);
-    A[0 * STATE_SIZE + 5] = cos(roll)*tan(pitch);
+    A[0 * STATE_SIZE + 4] = sin_roll * tan_pitch;
+    A[0 * STATE_SIZE + 5] = cos_roll * tan_pitch;
 
-    A[1 * STATE_SIZE + 4] = cos(roll);
-    A[1 * STATE_SIZE + 5] = -sin(roll);
+    A[1 * STATE_SIZE + 4] = cos_roll;
+    A[1 * STATE_SIZE + 5] = -sin_roll;
 
-    A[2 * STATE_SIZE + 4] = sin(roll)/cos(pitch);
-    A[2 * STATE_SIZE + 5] = cos(roll)/cos(pitch);
+    A[2 * STATE_SIZE + 4] = sin_roll * inv_cos_pitch;
+    A[2 * STATE_SIZE + 5] = cos_roll * inv_cos_pitch;
     
     // Row 4 (index 3)
     A[3 * STATE_SIZE + 4] = ((Iyy - Izz) / (2 * Ixx)) * r - Ir * omega_r / Ixx;
