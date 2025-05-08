@@ -7,7 +7,7 @@
 
 unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
 
-void updateSystemMatrix(float p, float q, float r);
+void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
 void printGains(float* K, float* Kr);
 void displayIMU();
 
@@ -110,7 +110,7 @@ void setup()
     }
 
     // Inicializa o controlador com a dinâmica do sistema
-    updateSystemMatrix(0, 0, 0); // Atualiza a matriz do sistema com os valores iniciais
+    updateSystemMatrix(0, 0, 0, 0, 0, 0); // Atualiza a matriz do sistema com os valores iniciais
     controller.setInputMatrix(Bd);
     controller.setCostMatrices(Q, R);
 
@@ -140,11 +140,16 @@ void loop(){
     filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
 
     // Obtém os ângulos de Euler (em graus)
-    float roll = filter.getRoll();
-    float pitch = filter.getPitch();
-    float yaw = filter.getYaw();
+    float roll = filter.getRollRadians();
+    float pitch = filter.getPitchRadians();
+    float yaw = filter.getYawRadians();
 
-    updateSystemMatrix(gx, gy, gz);  
+    float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
+    float q = gy*cos(roll) + gz*sin(roll);
+    float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
+    
+
+    updateSystemMatrix(roll, pitch, yaw, p, q, r);  
     //updateSystemMatrix(0, 0, 0);  
 
     // Calcula os ganhos ótimos
@@ -171,22 +176,31 @@ void loop(){
         Serial.println(max_exectuion_time);
     
         // Exibe os resultados
-        Serial.print("Roll: "); Serial.print(roll);
-        Serial.print(" | Pitch: "); Serial.print(pitch);
-        Serial.print(" | Yaw: "); Serial.println(yaw);
+        Serial.print("Roll: "); Serial.print(filter.getRoll());
+        Serial.print(" | Pitch: "); Serial.print(filter.getPitch());
+        Serial.print(" | Yaw: "); Serial.println(filter.getYaw());
     
         //printGains(exportedGains, exportedKr);
             
         //displayIMU();
 
         prev_ms = micros();
-
     }
 }
 
-void updateSystemMatrix(float p, float q, float r) {
+void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r) {
     // Update the continuous-time A matrix with current angular velocities
     // The first 3 rows remain constant
+
+    A[0 * STATE_SIZE + 3] = 1;
+    A[0 * STATE_SIZE + 4] = sin(roll)*tan(pitch);
+    A[0 * STATE_SIZE + 5] = cos(roll)*tan(pitch);
+
+    A[1 * STATE_SIZE + 4] = cos(roll);
+    A[1 * STATE_SIZE + 5] = -sin(roll);
+
+    A[2 * STATE_SIZE + 4] = sin(roll)/cos(pitch);
+    A[2 * STATE_SIZE + 5] = cos(roll)/cos(pitch);
     
     // Row 4 (index 3)
     A[3 * STATE_SIZE + 4] = ((Iyy - Izz) / (2 * Ixx)) * r - Ir * omega_r / Ixx;
@@ -212,7 +226,7 @@ void updateSystemMatrix(float p, float q, float r) {
             }
         }
     }
-    
+
     // Update the controller with the new state matrix
     controller.setStateMatrix(Ad);
 }
