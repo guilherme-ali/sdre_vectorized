@@ -115,6 +115,12 @@ public:
      */
     bool exportKr(float* exportedKr);
 
+    /**
+     * @brief Update the reference values
+     * @param newReference Pointer to new reference vector
+     */
+    void updateReference(const float* newReference);
+
 private:
     int stateSize; ///< Number of state variables
     int controlSize; ///< Number of control inputs
@@ -127,6 +133,7 @@ private:
     float* state; ///< Current state
     float* P; ///< Riccati equation solution
     float* Kr; ///< Kr gain matrix
+    float* reference; ///< To store reference values
 
     // Helper functions
 

@@ -10,7 +10,7 @@ unsigned long total_execution_time = 0; // Tempo total de execução
 unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
-void printGains(float* K, float* Kr);
+void printGains();
 void displayIMU();
 
 const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
@@ -78,26 +78,26 @@ void setup()
     SPI.begin();
     status = IMU.begin();
     if (status < 0) {
-        Serial.println("IMU initialization unsuccessful");
-        Serial.println("Check IMU wiring or try cycling power");
+        Serial.println("Falha na inicialização da IMU");
+        Serial.println("Verifique a fiação da IMU ou tente reiniciar a alimentação");
         Serial.print("Status: ");
         Serial.println(status);
         while(1) {}
     }
 
-    // setting the accelerometer full scale range to +/-8G 
+    // Define o range do acelerômetro para +/-8G 
     IMU.setAccelRange(MPU9250::ACCEL_RANGE_2G);
-    // setting the gyroscope full scale range to +/-500 deg/s
+    // Define o range do giroscópio para +/-500 deg/s
     IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
-    // setting DLPF bandwidth to 20 Hz
+    // Define a largura de banda do DLPF para 20 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
 
     /*
-    Serial.println("Calibrando acelerometro");
+    Serial.println("Calibrando acelerômetro");
     IMU.calibrateAccel();
-    Serial.println("Calibrando giroscopio");
+    Serial.println("Calibrando giroscópio");
     IMU.calibrateGyro();
-    Serial.println("Calibrando magnetometro");
+    Serial.println("Calibrando magnetômetro");
     IMU.calibrateMag();
     */
 
@@ -141,7 +141,7 @@ void loop(){
     // Atualiza o filtro de Madgwick
     filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
 
-    // Obtém os ângulos de Euler (em graus)
+    // Obtém os ângulos de Euler (em radianos)
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
@@ -150,33 +150,34 @@ void loop(){
     float q = gy*cos(roll) + gz*sin(roll);
     float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
     
-
     updateSystemMatrix(roll, pitch, yaw, p, q, r);  
-    //updateSystemMatrix(0, 0, 0);  
 
     // Calcula os ganhos ótimos
     controller.computeGains();
 
-    float exportedGains[CONTROL_SIZE * STATE_SIZE];
-    controller.exportGains(exportedGains);
-
-    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
-    controller.exportKr(exportedKr);
+    // Atualiza o estado do sistema e referência
+    float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
+    controller.updateState(x);
+    float ref[3] = {0, 0, 0};
+    controller.updateReference(ref);
+    
+    float u[CONTROL_SIZE];
+    controller.calculateControl(u);
 
     unsigned long endTime = micros(); // Captura o tempo final
     unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
 
-    // Update max execution time
+    // Atualiza o tempo máximo de execução
     if (executionTime > max_exectuion_time & executionTime < 50000) {
         max_exectuion_time = executionTime;
     }
     
-    // Update total execution time and count for average calculation
+    // Atualiza o tempo total de execução e o contador para cálculo da média
     total_execution_time += executionTime;
     execution_count++;
     
     if(micros() >= prev_ms + 1000000){
-        // Calculate average execution time
+        // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
         
@@ -194,7 +195,7 @@ void loop(){
         Serial.print(" | Yaw: "); Serial.println(filter.getYaw());
         */
     
-        printGains(exportedGains, exportedKr);
+        printGains();
             
         //displayIMU();
 
@@ -203,8 +204,8 @@ void loop(){
 }
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r) {
-    // Update the continuous-time A matrix with current angular velocities
-    // The first 3 rows remain constant
+    // Atualiza a matriz A contínua com as velocidades angulares atuais
+    // As três primeiras linhas permanecem constantes
 
     float sin_roll = sin(roll);
     float cos_roll = cos(roll);
@@ -222,20 +223,20 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     A[2 * STATE_SIZE + 4] = sin_roll * inv_cos_pitch;
     A[2 * STATE_SIZE + 5] = cos_roll * inv_cos_pitch;
     
-    // Row 4 (index 3)
+    // Linha 4 (índice 3)
     A[3 * STATE_SIZE + 4] = ((Iyy - Izz) / (2 * Ixx)) * r - Ir * omega_r / Ixx;
     A[3 * STATE_SIZE + 5] = ((Iyy - Izz) / (2 * Ixx)) * q;
     
-    // Row 5 (index 4)
+    // Linha 5 (índice 4)
     A[4 * STATE_SIZE + 3] = ((Izz - Ixx) / (2 * Iyy)) * r - Ir * omega_r / Iyy;
     A[4 * STATE_SIZE + 5] = ((Izz - Ixx) / (2 * Iyy)) * p;
     
-    // Row 6 (index 5)
+    // Linha 6 (índice 5)
     A[5 * STATE_SIZE + 3] = ((Ixx - Iyy) / (2 * Izz)) * q;
     A[5 * STATE_SIZE + 4] = ((Ixx - Iyy) / (2 * Izz)) * p;
     
-    // Discretize the updated A matrix
-    float samplingTime = 0.01; // Same sampling time as in setup()
+    // Discretiza a matriz A atualizada
+    float samplingTime = 0.01; // Mesmo tempo de amostragem do setup()
     
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
@@ -247,18 +248,24 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
         }
     }
 
-    // Update the controller with the new state matrix
+    // Atualiza o controlador com a nova matriz de estados
     controller.setStateMatrix(Ad);
 }
 
-void printGains(float* K, float* Kr){
+void printGains(){
+
+    float exportedGains[CONTROL_SIZE * STATE_SIZE];
+    controller.exportGains(exportedGains);
+
+    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
+    controller.exportKr(exportedKr);
     Serial.println("Ganhos do LQR calculados com sucesso");
 
     // Exporta os ganhos calculados
     Serial.println("Ganhos Exportados (K):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
-            Serial.print(K[i * STATE_SIZE + j], 6);
+            Serial.print(exportedGains[i * STATE_SIZE + j], 6);
             Serial.print(" ");
         }
         Serial.println();
@@ -269,7 +276,7 @@ void printGains(float* K, float* Kr){
     Serial.println("Matriz Kr (ganho de referência):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < CONTROL_SIZE; j++) {
-            Serial.print(Kr[i * CONTROL_SIZE + j], 6);
+            Serial.print(exportedKr[i * CONTROL_SIZE + j], 6);
             Serial.print(" ");
         }
         Serial.println();

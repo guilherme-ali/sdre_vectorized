@@ -12,6 +12,7 @@ AutoLQR::AutoLQR(int stateSize, int controlSize)
     , state(nullptr)
     , P(nullptr)
     , Kr(nullptr)
+    , reference(nullptr)
 {
     if (stateSize > 0 && controlSize > 0) {
         A = new float[stateSize * stateSize]();
@@ -22,6 +23,7 @@ AutoLQR::AutoLQR(int stateSize, int controlSize)
         state = new float[stateSize]();
         P = new float[stateSize * stateSize]();
         Kr = new float[controlSize * controlSize]();
+        reference = new float[controlSize]();
     }
 }
 
@@ -35,6 +37,7 @@ AutoLQR::~AutoLQR()
     delete[] state;
     delete[] P;
     delete[] Kr;
+    delete[] reference;
 }
 
 bool AutoLQR::setStateMatrix(const float* inputA)
@@ -87,9 +90,16 @@ void AutoLQR::updateState(const float* currentState)
     memcpy(state, currentState, sizeof(float) * stateSize);
 }
 
+void AutoLQR::updateReference(const float* newReference)
+{
+    if (!newReference || !reference)
+        return;
+    memcpy(reference, newReference, sizeof(float) * controlSize);
+}
+
 void AutoLQR::calculateControl(float* controlOutput)
 {
-    if (!controlOutput || !K || !state)
+    if (!controlOutput || !K || !state || !Kr || !reference)
         return;
 
     // Initialize control outputs to zero
@@ -97,10 +107,11 @@ void AutoLQR::calculateControl(float* controlOutput)
         controlOutput[i] = 0;
     }
 
-    // u = -K·x
+    // u = -K·x + Kr·r
     for (int i = 0; i < controlSize; i++) {
         for (int j = 0; j < stateSize; j++) {
             controlOutput[i] -= K[i * stateSize + j] * state[j];
+            controlOutput[i] += Kr[i * controlSize + j] * reference[j];
         }
     }
 }
@@ -329,7 +340,7 @@ bool AutoLQR::computeGainMatrix()
     transposeMatrix(A, AT, stateSize, stateSize);
 
     // Iterate to solve DARE: P = A'PA - A'PB(R + B'PB)^(-1)B'PA + Q
-    const int maxIterations = 100000; // Increased from 50
+    const int maxIterations = 50; // Increased from 50
     const float tolerance = 1e-3; // Tighter tolerance
 
     for (int iter = 0; iter < maxIterations; iter++) {
