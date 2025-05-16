@@ -1,6 +1,7 @@
 #include <AutoLQR.h>
 #include "MPU9250.h"
 #include <MadgwickAHRS.h>
+#include <Wire.h> // Adicionar include para I2C
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -17,7 +18,7 @@ const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
 const float Iyy = 0.00225;  // Momento de inércia em torno do eixo y   
 const float Izz = 0.00338;  // Momento de inércia em torno do eixo z
 const float Ir = 0.00001;   // Momento de inércia do conjunto do motor e hélice
-float omega_r = 2500; // Velocidade angular do motor
+float omega_r = 1000; // Velocidade angular do motor
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az; // Acelerômetro (g)
@@ -67,7 +68,7 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
 // Controlador e variáveis de estado
 AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
 
-MPU9250 IMU(SPI, 5);
+MPU9250 IMU(Wire, 0x68); // Alterado para usar I2C (Wire) e o endereço padrão 0x68
 Madgwick filter;
 int status;
 
@@ -75,7 +76,7 @@ void setup()
 {
     Serial.begin(115200);
 
-    SPI.begin();
+    Wire.begin(); // Inicializa a comunicação I2C
     status = IMU.begin();
     if (status < 0) {
         Serial.println("Falha na inicialização da IMU");

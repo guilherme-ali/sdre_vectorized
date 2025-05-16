@@ -447,6 +447,17 @@ bool AutoLQR::computeGainMatrixKr()
         return false;
     }
 
+    for (int i = 0; i < controlSize; ++i) { 
+        for (int j = 0; j < controlSize; ++j) { 
+            if (j < stateSize) {
+                Kr[i * controlSize + j] = -K[i * stateSize + j];
+            } else {
+                Kr[i * controlSize + j] = 0.0f;
+            }
+        }
+    }
+    return true; 
+    /*
     float* I_minus_A = new float[stateSize * stateSize]();
     float* BK = new float[stateSize * stateSize]();
     float* I_minus_A_minus_BK = new float[stateSize * stateSize]();
@@ -523,6 +534,7 @@ bool AutoLQR::computeGainMatrixKr()
     delete[] C;
     
     return true;
+    */
 }
 
 bool AutoLQR::exportKr(float* exportedKr)
