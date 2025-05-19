@@ -11,6 +11,7 @@ unsigned long total_execution_time = 0; // Tempo total de execução
 unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
+void calculateU(const float* x, float* u);
 void printGains();
 void displayIMU();
 
@@ -80,10 +81,11 @@ void setup()
     status = IMU.begin();
     if (status < 0) {
         Serial.println("Falha na inicialização da IMU");
-        Serial.println("Verifique a fiação da IMU ou tente reiniciar a alimentação");
         Serial.print("Status: ");
         Serial.println(status);
-        while(1) {}
+        if(status != -5){
+            while(1) {}
+        }
     }
 
     // Define o range do acelerômetro para +/-8G 
@@ -93,11 +95,12 @@ void setup()
     // Define a largura de banda do DLPF para 20 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
 
-    /*
+    
     Serial.println("Calibrando acelerômetro");
     IMU.calibrateAccel();
     Serial.println("Calibrando giroscópio");
     IMU.calibrateGyro();
+    /*
     Serial.println("Calibrando magnetômetro");
     IMU.calibrateMag();
     */
@@ -189,14 +192,22 @@ void loop(){
         Serial.print("Tempo_Medio:");
         Serial.println(avg_execution_time);
     
-        /*
+        
         // Exibe os resultados
         Serial.print("Roll: "); Serial.print(filter.getRoll());
         Serial.print(" | Pitch: "); Serial.print(filter.getPitch());
         Serial.print(" | Yaw: "); Serial.println(filter.getYaw());
-        */
+        
     
         printGains();
+
+        float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
+        float u[CONTROL_SIZE];
+        calculateU(x, u);
+
+        Serial.print("u1: "); Serial.print(u[0]);
+        Serial.print(" | u2: "); Serial.print(u[1]);
+        Serial.print(" | u3: "); Serial.println(u[2]);
             
         //displayIMU();
 
@@ -251,6 +262,32 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
 
     // Atualiza o controlador com a nova matriz de estados
     controller.setStateMatrix(Ad);
+}
+
+void calculateU(const float* x, float* u) {
+    // Obter os ganhos K e Kr do controlador
+    float K[CONTROL_SIZE * STATE_SIZE];
+    controller.exportGains(K);
+    
+    float Kr[CONTROL_SIZE * CONTROL_SIZE];
+    controller.exportKr(Kr);
+    
+    // Erro de referência (0,0,0)
+    float erro[CONTROL_SIZE] = {0, 0, 0};
+    
+    // Calcular u = -K*x + Kr*erro
+    for (int i = 0; i < CONTROL_SIZE; i++) {
+        // Parte -K*x
+        u[i] = 0;
+        for (int j = 0; j < STATE_SIZE; j++) {
+            u[i] -= K[i * STATE_SIZE + j] * x[j];
+        }
+        
+        // Parte Kr*erro (será zero se erro for zero)
+        for (int j = 0; j < CONTROL_SIZE; j++) {
+            u[i] += Kr[i * CONTROL_SIZE + j] * erro[j];
+        }
+    }
 }
 
 void printGains(){

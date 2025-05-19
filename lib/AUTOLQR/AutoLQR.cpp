@@ -210,6 +210,72 @@ bool AutoLQR::invertMatrix(const float* matrix, float* result, int n)
         result[8] = (a * e - b * d) * invDet;
 
         return true;
+    } else if (n == 4) {
+        // 4x4 Matrix inversion using Gauss-Jordan elimination
+        float* augmented = new float[4 * 8](); // Augmented matrix [A|I]
+
+        // Initialize augmented matrix with [A|I]
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                augmented[i * 8 + j] = matrix[i * 4 + j];
+            }
+            // Add identity matrix part
+            augmented[i * 8 + (i + 4)] = 1.0f;
+        }
+
+        // Perform Gauss-Jordan elimination
+        for (int i = 0; i < 4; i++) {
+            // Find pivot
+            float maxVal = fabs(augmented[i * 8 + i]);
+            int maxRow = i;
+            for (int j = i + 1; j < 4; j++) {
+                if (fabs(augmented[j * 8 + i]) > maxVal) {
+                    maxVal = fabs(augmented[j * 8 + i]);
+                    maxRow = j;
+                }
+            }
+
+            // Check for singular matrix
+            if (maxVal < 1e-6) {
+                delete[] augmented;
+                return false;
+            }
+
+            // Swap rows if needed
+            if (maxRow != i) {
+                for (int j = 0; j < 8; j++) {
+                    float temp = augmented[i * 8 + j];
+                    augmented[i * 8 + j] = augmented[maxRow * 8 + j];
+                    augmented[maxRow * 8 + j] = temp;
+                }
+            }
+
+            // Scale row so pivot is 1
+            float pivotVal = augmented[i * 8 + i];
+            for (int j = 0; j < 8; j++) {
+                augmented[i * 8 + j] /= pivotVal;
+            }
+
+            // Eliminate other rows
+            for (int j = 0; j < 4; j++) {
+                if (j != i) {
+                    float factor = augmented[j * 8 + i];
+                    for (int k = 0; k < 8; k++) {
+                        augmented[j * 8 + k] -= factor * augmented[i * 8 + k];
+                    }
+                }
+            }
+        }
+
+        // Extract inverse from augmented matrix
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                result[i * 4 + j] = augmented[i * 8 + (j + 4)];
+            }
+        }
+
+        delete[] augmented;
+        return true;
     }
     else if (n == 6) {
         // Create augmented matrix [A|I]
@@ -278,7 +344,8 @@ bool AutoLQR::invertMatrix(const float* matrix, float* result, int n)
         delete[] augmented;
         return true;
     }
-    Serial.println("Tamanho da matriz não suportado para inversão.");
+    Serial.print("Tamanho da matriz não suportado para inversão, tamanho: ");
+    Serial.println(n);
     return false;
 }
 
