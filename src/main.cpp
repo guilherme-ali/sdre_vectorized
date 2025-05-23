@@ -5,26 +5,32 @@
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
+#define gravity 9.81f
 
 unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
 unsigned long total_execution_time = 0; // Tempo total de execução
 unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
-void calculateU(const float* x, float* u);
 void printGains();
 void displayIMU();
+void displayStates(float states[]); 
+void displayControlSignals(float u_signal[], float thrust_signal);
 
 const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
 const float Iyy = 0.00225;  // Momento de inércia em torno do eixo y   
 const float Izz = 0.00338;  // Momento de inércia em torno do eixo z
 const float Ir = 0.00001;   // Momento de inércia do conjunto do motor e hélice
+const float m = 1;
 float omega_r = 1000; // Velocidade angular do motor
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az; // Acelerômetro (g)
 float gx, gy, gz; // Giroscópio (rad/s)
 float mx, my, mz; // Magnetômetro (uT)
+
+float rvx = 0, rvy = 0, rvz = 0; // Referência de velocidade
+float evx = 0, evy = 0, evz = 0; // Erro de velocidade
 
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
@@ -159,10 +165,19 @@ void loop(){
     // Calcula os ganhos ótimos
     controller.computeGains();
 
+    evx = rvx - 0;
+    evy = rvy - 0;
+    evz = rvz - 0;
+
+    float theta_desired = atan(evx / (evz + gravity));
+    float phi_desired = -atan((evy*cos(theta_desired) )/ (evz + gravity));
+    float thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
+
     // Atualiza o estado do sistema e referência
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
     controller.updateState(x);
-    float ref[3] = {0, 0, 0};
+
+    float ref[3] = {phi_desired, theta_desired, 0};
     controller.updateReference(ref);
     
     float u[CONTROL_SIZE];
@@ -194,20 +209,11 @@ void loop(){
     
         
         // Exibe os resultados
-        Serial.print("Roll: "); Serial.print(filter.getRoll());
-        Serial.print(" | Pitch: "); Serial.print(filter.getPitch());
-        Serial.print(" | Yaw: "); Serial.println(filter.getYaw());
-        
+        displayStates(x); // Passa o array de estados x
     
         printGains();
 
-        float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
-        float u[CONTROL_SIZE];
-        calculateU(x, u);
-
-        Serial.print("u1: "); Serial.print(u[0]);
-        Serial.print(" | u2: "); Serial.print(u[1]);
-        Serial.print(" | u3: "); Serial.println(u[2]);
+        displayControlSignals(u, thrust); 
             
         //displayIMU();
 
@@ -264,32 +270,6 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     controller.setStateMatrix(Ad);
 }
 
-void calculateU(const float* x, float* u) {
-    // Obter os ganhos K e Kr do controlador
-    float K[CONTROL_SIZE * STATE_SIZE];
-    controller.exportGains(K);
-    
-    float Kr[CONTROL_SIZE * CONTROL_SIZE];
-    controller.exportKr(Kr);
-    
-    // Erro de referência (0,0,0)
-    float erro[CONTROL_SIZE] = {0, 0, 0};
-    
-    // Calcular u = -K*x + Kr*erro
-    for (int i = 0; i < CONTROL_SIZE; i++) {
-        // Parte -K*x
-        u[i] = 0;
-        for (int j = 0; j < STATE_SIZE; j++) {
-            u[i] -= K[i * STATE_SIZE + j] * x[j];
-        }
-        
-        // Parte Kr*erro (será zero se erro for zero)
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            u[i] += Kr[i * CONTROL_SIZE + j] * erro[j];
-        }
-    }
-}
-
 void printGains(){
 
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
@@ -342,3 +322,20 @@ void displayIMU() {
     Serial.print("\t");
     Serial.println(IMU.getTemperature_C(), 6);
 }
+
+void displayStates(float states[]) { 
+    Serial.print("Roll: "); Serial.print(states[0]); // Roll em radianos
+    Serial.print(" | Pitch: "); Serial.print(states[1]); // Pitch em radianos
+    Serial.print(" | Yaw: "); Serial.print(states[2]); // Yaw em radianos
+    Serial.print(" | p: "); Serial.print(states[3]);
+    Serial.print(" | q: "); Serial.print(states[4]);
+    Serial.print(" | r: "); Serial.println(states[5]);
+}
+
+void displayControlSignals(float u_signal[], float thrust_signal) {
+    Serial.print("u1: "); Serial.print(u_signal[0]);
+    Serial.print(" | u2: "); Serial.print(u_signal[1]);
+    Serial.print(" | u3: "); Serial.print(u_signal[2]);
+    Serial.print(" | T: "); Serial.println(thrust_signal);
+}
+

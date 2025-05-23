@@ -111,7 +111,9 @@ void AutoLQR::calculateControl(float* controlOutput)
     for (int i = 0; i < controlSize; i++) {
         for (int j = 0; j < stateSize; j++) {
             controlOutput[i] -= K[i * stateSize + j] * state[j];
-            controlOutput[i] += Kr[i * controlSize + j] * reference[j];
+            if(j < controlSize) {
+                controlOutput[i] += Kr[i * controlSize + j] * reference[j];
+            }
         }
     }
 }
