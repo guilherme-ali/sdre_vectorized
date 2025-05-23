@@ -126,7 +126,7 @@ void setup()
     controller.setInputMatrix(Bd);
     controller.setCostMatrices(Q, R);
 
-    filter.begin(1.0f/samplingTime);
+    filter.begin(0.01f/samplingTime);
 }
 
 void loop(){
@@ -195,7 +195,7 @@ void loop(){
     total_execution_time += executionTime;
     execution_count++;
     
-    if(micros() >= prev_ms + 1000000){
+    if(micros() >= prev_ms + 50000){
         // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
@@ -206,11 +206,11 @@ void loop(){
         Serial.println(max_exectuion_time);
         Serial.print("Tempo_Medio:");
         Serial.println(avg_execution_time);
-    
+        
         
         // Exibe os resultados
-        displayStates(x); // Passa o array de estados x
-    
+        displayStates(x);
+        
         printGains();
 
         displayControlSignals(u, thrust); 
@@ -324,18 +324,18 @@ void displayIMU() {
 }
 
 void displayStates(float states[]) { 
-    Serial.print("Roll: "); Serial.print(states[0]); // Roll em radianos
-    Serial.print(" | Pitch: "); Serial.print(states[1]); // Pitch em radianos
-    Serial.print(" | Yaw: "); Serial.print(states[2]); // Yaw em radianos
-    Serial.print(" | p: "); Serial.print(states[3]);
-    Serial.print(" | q: "); Serial.print(states[4]);
-    Serial.print(" | r: "); Serial.println(states[5]);
+    Serial.print("Roll:"); Serial.print(states[0]); // Roll em radianos
+    Serial.print(",Pitch:"); Serial.print(states[1]); // Pitch em radianos
+    Serial.print(",Yaw:"); Serial.print(states[2]); // Yaw em radianos
+    Serial.print(",p:"); Serial.print(states[3]);
+    Serial.print(",q:"); Serial.print(states[4]);
+    Serial.print(",r:"); Serial.println(states[5]);
 }
 
 void displayControlSignals(float u_signal[], float thrust_signal) {
-    Serial.print("u1: "); Serial.print(u_signal[0]);
-    Serial.print(" | u2: "); Serial.print(u_signal[1]);
-    Serial.print(" | u3: "); Serial.print(u_signal[2]);
-    Serial.print(" | T: "); Serial.println(thrust_signal);
+    Serial.print("u1:"); Serial.print(u_signal[0]);
+    Serial.print(",u2:"); Serial.print(u_signal[1]);
+    Serial.print(",u3:"); Serial.print(u_signal[2]);
+    Serial.print(",T:"); Serial.println(thrust_signal);
 }
 
