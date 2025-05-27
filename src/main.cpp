@@ -12,10 +12,11 @@ unsigned long total_execution_time = 0; // Tempo total de execução
 unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
-void printGains();
+void displayGains();
 void displayIMU();
 void displayStates(float states[]); 
 void displayControlSignals(float u_signal[], float thrust_signal);
+void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff); 
 
 const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
 const float Iyy = 0.00225;  // Momento de inércia em torno do eixo y   
@@ -23,6 +24,8 @@ const float Izz = 0.00338;  // Momento de inércia em torno do eixo z
 const float Ir = 0.00001;   // Momento de inércia do conjunto do motor e hélice
 const float m = 1;
 float omega_r = 1000; // Velocidade angular do motor
+const float MOTOR_B_COEFF = 0.001; // Exemplo: Coeficiente de empuxo (ex: N/(rad/s)^2)
+const float MOTOR_D_COEFF = 0.001; // Exemplo: Coeficiente de arrasto/torque de guinada (ex: Nm/(rad/s)^2)
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az; // Acelerômetro (g)
@@ -195,7 +198,7 @@ void loop(){
     total_execution_time += executionTime;
     execution_count++;
     
-    if(micros() >= prev_ms + 50000){
+    if(micros() >= prev_ms + 1000000){
         // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
@@ -211,11 +214,15 @@ void loop(){
         // Exibe os resultados
         displayStates(x);
         
-        printGains();
+        //displayGains();
 
         displayControlSignals(u, thrust); 
+
+        displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
             
         //displayIMU();
+
+        Serial.println("--------------------------------------------------");
 
         prev_ms = micros();
     }
@@ -270,7 +277,7 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     controller.setStateMatrix(Ad);
 }
 
-void printGains(){
+void displayGains(){
 
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
     controller.exportGains(exportedGains);
@@ -337,5 +344,31 @@ void displayControlSignals(float u_signal[], float thrust_signal) {
     Serial.print(",u2:"); Serial.print(u_signal[1]);
     Serial.print(",u3:"); Serial.print(u_signal[2]);
     Serial.print(",T:"); Serial.println(thrust_signal);
+}
+
+void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff) {
+    if (b_coeff == 0.0f || d_coeff == 0.0f) {
+        Serial.println("Erro: Coeficientes b ou d não podem ser zero em displayMotorOmegaSq.");
+        return;
+    }
+
+    float inv_4b = 1.0f / (4.0f * b_coeff);
+    float inv_2b = 1.0f / (2.0f * b_coeff);
+    float inv_4d = 1.0f / (4.0f * d_coeff);
+
+    float u1 = thrust_signal;    // Empuxo total
+    float u2 = u_torques[0];     // Torque de Rolagem
+    float u3 = u_torques[1];     // Torque de Arfagem
+    float u4 = u_torques[2];     // Torque de Guinada
+
+    float w1_sq = u1 * inv_4b           - u3 * inv_2b - u4 * inv_4d;
+    float w2_sq = u1 * inv_4b - u2 * inv_2b           + u4 * inv_4d;
+    float w3_sq = u1 * inv_4b           + u3 * inv_2b - u4 * inv_4d;
+    float w4_sq = u1 * inv_4b + u2 * inv_2b           + u4 * inv_4d;
+
+    Serial.print("w1_sq: "); Serial.print(w1_sq);
+    Serial.print(", w2_sq: "); Serial.print(w2_sq);
+    Serial.print(", w3_sq: "); Serial.print(w3_sq);
+    Serial.print(", w4_sq: "); Serial.println(w4_sq);
 }
 
