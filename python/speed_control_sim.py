@@ -274,7 +274,7 @@ axs_2d[3, 1].legend(), axs_2d[3, 1].grid(True)
 
 fig_2d.tight_layout()
 plt.show(block=False)
-
+plt.savefig('python/outputs/speed_control_sim_results_2d_static.png', dpi=300)
 
 # --- Animação 3D Separada com Representação de Atitude Ajustada ---
 print("Preparando animação 3D com atitude ajustada...")
@@ -348,4 +348,7 @@ anim_interval_ms = 40
 ani = animation.FuncAnimation(fig_anim, update_animation, frames=num_animation_frames,
                               init_func=init_animation, blit=True, interval=anim_interval_ms, repeat=False)
 plt.show()
+
+print("Salvando animação 3D...")
+ani.save('python/outputs/speed_control_sim_animation_3d.mp4', writer='ffmpeg', fps=20, dpi=300)
 print("Fim do script.")
