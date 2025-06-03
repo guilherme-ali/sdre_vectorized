@@ -2,8 +2,9 @@
 #define AUTO_LQR_H
 
 #include <Arduino.h>
+#include "MatrixOperations.h"
 
-class AutoLQR {
+class AutoLQR : public MatrixOperations {
 public:
     /**
      * @brief Construct a new AutoLQR controller
@@ -134,57 +135,6 @@ private:
     float* P; ///< Riccati equation solution
     float* Kr; ///< Kr gain matrix
     float* reference; ///< To store reference values
-
-    // Helper functions
-
-    /**
-     * @brief Multiply two matrices
-     * @param m1 First matrix
-     * @param m2 Second matrix
-     * @param result Result matrix
-     * @param rows1 Rows in first matrix
-     * @param cols1 Columns in first matrix / Rows in second matrix
-     * @param cols2 Columns in second matrix
-     */
-    void matrixMultiply(const float* m1, const float* m2, float* result, int rows1, int cols1, int cols2);
-
-    /**
-     * @brief Add two matrices
-     * @param m1 First matrix
-     * @param m2 Second matrix
-     * @param result Result matrix
-     * @param rows Rows in matrices
-     * @param cols Columns in matrices
-     */
-    void matrixAdd(const float* m1, const float* m2, float* result, int rows, int cols);
-
-    /**
-     * @brief Subtract second matrix from first
-     * @param m1 First matrix
-     * @param m2 Second matrix
-     * @param result Result matrix
-     * @param rows Rows in matrices
-     * @param cols Columns in matrices
-     */
-    void matrixSubtract(const float* m1, const float* m2, float* result, int rows, int cols);
-
-    /**
-     * @brief Transpose a matrix
-     * @param matrix Input matrix
-     * @param result Transposed matrix
-     * @param rows Rows in input matrix
-     * @param cols Columns in input matrix
-     */
-    void transposeMatrix(const float* matrix, float* result, int rows, int cols);
-
-    /**
-     * @brief Invert a small matrix (1x1, 2x2, 3x3)
-     * @param matrix Input matrix
-     * @param result Inverted matrix
-     * @param n Matrix size
-     * @return true if successful, false if matrix is singular
-     */
-    bool invertMatrix(const float* matrix, float* result, int n);
 
     /**
      * @brief Compute the optimal gain matrix by solving DARE

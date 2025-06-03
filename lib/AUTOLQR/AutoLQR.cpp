@@ -44,7 +44,7 @@ bool AutoLQR::setStateMatrix(const float* inputA)
 {
     if (!inputA || !A)
         return false;
-    memcpy(A, inputA, sizeof(float) * stateSize * stateSize);
+    matrixCopy(inputA, A, stateSize * stateSize);
     return true;
 }
 
@@ -52,7 +52,7 @@ bool AutoLQR::setInputMatrix(const float* inputB)
 {
     if (!inputB || !B)
         return false;
-    memcpy(B, inputB, sizeof(float) * stateSize * controlSize);
+    matrixCopy(inputB, B, stateSize * controlSize);
     return true;
 }
 
@@ -60,8 +60,8 @@ bool AutoLQR::setCostMatrices(const float* inputQ, const float* inputR)
 {
     if (!inputQ || !inputR || !Q || !R)
         return false;
-    memcpy(Q, inputQ, sizeof(float) * stateSize * stateSize);
-    memcpy(R, inputR, sizeof(float) * controlSize * controlSize);
+    matrixCopy(inputQ, Q, stateSize * stateSize);
+    matrixCopy(inputR, R, controlSize * controlSize);
     return true;
 }
 
@@ -69,7 +69,7 @@ void AutoLQR::setGains(const float* inputK)
 {
     if (!inputK || !K)
         return;
-    memcpy(K, inputK, sizeof(float) * controlSize * stateSize);
+    matrixCopy(inputK, K, controlSize * stateSize);
 }
 
 bool AutoLQR::computeGains()
@@ -87,14 +87,14 @@ void AutoLQR::updateState(const float* currentState)
 {
     if (!currentState || !state)
         return;
-    memcpy(state, currentState, sizeof(float) * stateSize);
+    matrixCopy(currentState, state, stateSize);
 }
 
 void AutoLQR::updateReference(const float* newReference)
 {
     if (!newReference || !reference)
         return;
-    memcpy(reference, newReference, sizeof(float) * controlSize);
+    matrixCopy(newReference, reference, controlSize);
 }
 
 void AutoLQR::calculateControl(float* controlOutput)
@@ -103,9 +103,7 @@ void AutoLQR::calculateControl(float* controlOutput)
         return;
 
     // Initialize control outputs to zero
-    for (int i = 0; i < controlSize; i++) {
-        controlOutput[i] = 0;
-    }
+    matrixClear(controlOutput, controlSize);
 
     // u = -K·x + Kr·r
     for (int i = 0; i < controlSize; i++) {
@@ -116,239 +114,6 @@ void AutoLQR::calculateControl(float* controlOutput)
             }
         }
     }
-}
-
-void AutoLQR::matrixMultiply(const float* m1, const float* m2, float* result, int rows1, int cols1, int cols2)
-{
-    if (!m1 || !m2 || !result)
-        return;
-
-    // Initialize result matrix to zero
-    for (int i = 0; i < rows1 * cols2; i++) {
-        result[i] = 0;
-    }
-
-    for (int i = 0; i < rows1; i++) {
-        for (int j = 0; j < cols2; j++) {
-            for (int k = 0; k < cols1; k++) {
-                result[i * cols2 + j] += m1[i * cols1 + k] * m2[k * cols2 + j];
-            }
-        }
-    }
-}
-
-void AutoLQR::matrixAdd(const float* m1, const float* m2, float* result, int rows, int cols)
-{
-    if (!m1 || !m2 || !result)
-        return;
-
-    for (int i = 0; i < rows * cols; i++) {
-        result[i] = m1[i] + m2[i];
-    }
-}
-
-void AutoLQR::matrixSubtract(const float* m1, const float* m2, float* result, int rows, int cols)
-{
-    if (!m1 || !m2 || !result)
-        return;
-
-    for (int i = 0; i < rows * cols; i++) {
-        result[i] = m1[i] - m2[i];
-    }
-}
-
-void AutoLQR::transposeMatrix(const float* matrix, float* result, int rows, int cols)
-{
-    if (!matrix || !result)
-        return;
-
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            result[j * rows + i] = matrix[i * cols + j];
-        }
-    }
-}
-
-bool AutoLQR::invertMatrix(const float* matrix, float* result, int n)
-{
-    if (!matrix || !result)
-        return false;
-
-    if (n == 1) {
-        if (fabs(matrix[0]) < 1e-6)
-            return false;
-        result[0] = 1.0f / matrix[0];
-        return true;
-    } else if (n == 2) {
-        float det = matrix[0] * matrix[3] - matrix[1] * matrix[2];
-        if (fabs(det) < 1e-6)
-            return false;
-        float invDet = 1.0f / det;
-        result[0] = matrix[3] * invDet;
-        result[1] = -matrix[1] * invDet;
-        result[2] = -matrix[2] * invDet;
-        result[3] = matrix[0] * invDet;
-        return true;
-    } else if (n == 3) {
-        // 3x3 Matrix inversion
-        float a = matrix[0], b = matrix[1], c = matrix[2];
-        float d = matrix[3], e = matrix[4], f = matrix[5];
-        float g = matrix[6], h = matrix[7], i = matrix[8];
-
-        float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-        if (fabs(det) < 1e-6)
-            return false;
-
-        float invDet = 1.0f / det;
-
-        result[0] = (e * i - f * h) * invDet;
-        result[1] = (c * h - b * i) * invDet;
-        result[2] = (b * f - c * e) * invDet;
-        result[3] = (f * g - d * i) * invDet;
-        result[4] = (a * i - c * g) * invDet;
-        result[5] = (c * d - a * f) * invDet;
-        result[6] = (d * h - e * g) * invDet;
-        result[7] = (b * g - a * h) * invDet;
-        result[8] = (a * e - b * d) * invDet;
-
-        return true;
-    } else if (n == 4) {
-        // 4x4 Matrix inversion using Gauss-Jordan elimination
-        float* augmented = new float[4 * 8](); // Augmented matrix [A|I]
-
-        // Initialize augmented matrix with [A|I]
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                augmented[i * 8 + j] = matrix[i * 4 + j];
-            }
-            // Add identity matrix part
-            augmented[i * 8 + (i + 4)] = 1.0f;
-        }
-
-        // Perform Gauss-Jordan elimination
-        for (int i = 0; i < 4; i++) {
-            // Find pivot
-            float maxVal = fabs(augmented[i * 8 + i]);
-            int maxRow = i;
-            for (int j = i + 1; j < 4; j++) {
-                if (fabs(augmented[j * 8 + i]) > maxVal) {
-                    maxVal = fabs(augmented[j * 8 + i]);
-                    maxRow = j;
-                }
-            }
-
-            // Check for singular matrix
-            if (maxVal < 1e-6) {
-                delete[] augmented;
-                return false;
-            }
-
-            // Swap rows if needed
-            if (maxRow != i) {
-                for (int j = 0; j < 8; j++) {
-                    float temp = augmented[i * 8 + j];
-                    augmented[i * 8 + j] = augmented[maxRow * 8 + j];
-                    augmented[maxRow * 8 + j] = temp;
-                }
-            }
-
-            // Scale row so pivot is 1
-            float pivotVal = augmented[i * 8 + i];
-            for (int j = 0; j < 8; j++) {
-                augmented[i * 8 + j] /= pivotVal;
-            }
-
-            // Eliminate other rows
-            for (int j = 0; j < 4; j++) {
-                if (j != i) {
-                    float factor = augmented[j * 8 + i];
-                    for (int k = 0; k < 8; k++) {
-                        augmented[j * 8 + k] -= factor * augmented[i * 8 + k];
-                    }
-                }
-            }
-        }
-
-        // Extract inverse from augmented matrix
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                result[i * 4 + j] = augmented[i * 8 + (j + 4)];
-            }
-        }
-
-        delete[] augmented;
-        return true;
-    }
-    else if (n == 6) {
-        // Create augmented matrix [A|I]
-        float* augmented = new float[6 * 12]();
-        
-        // Initialize augmented matrix with [A|I]
-        for (int i = 0; i < 6; i++) {
-            for (int j = 0; j < 6; j++) {
-                augmented[i * 12 + j] = matrix[i * 6 + j];
-            }
-            // Add identity matrix part
-            augmented[i * 12 + (i + 6)] = 1.0f;
-        }
-        
-        // Perform Gauss-Jordan elimination
-        for (int i = 0; i < 6; i++) {
-            // Find pivot
-            float maxVal = fabs(augmented[i * 12 + i]);
-            int maxRow = i;
-            for (int j = i + 1; j < 6; j++) {
-                if (fabs(augmented[j * 12 + i]) > maxVal) {
-                    maxVal = fabs(augmented[j * 12 + i]);
-                    maxRow = j;
-                }
-            }
-            
-            // Check for singular matrix
-            if (maxVal < 1e-6) {
-                delete[] augmented;
-                return false;
-            }
-                
-            // Swap rows if needed
-            if (maxRow != i) {
-                for (int j = 0; j < 12; j++) {
-                    float temp = augmented[i * 12 + j];
-                    augmented[i * 12 + j] = augmented[maxRow * 12 + j];
-                    augmented[maxRow * 12 + j] = temp;
-                }
-            }
-            
-            // Scale row so pivot is 1
-            float pivotVal = augmented[i * 12 + i];
-            for (int j = 0; j < 12; j++) {
-                augmented[i * 12 + j] /= pivotVal;
-            }
-            
-            // Eliminate other rows
-            for (int j = 0; j < 6; j++) {
-                if (j != i) {
-                    float factor = augmented[j * 12 + i];
-                    for (int k = 0; k < 12; k++) {
-                        augmented[j * 12 + k] -= factor * augmented[i * 12 + k];
-                    }
-                }
-            }
-        }
-        
-        // Extract inverse from augmented matrix
-        for (int i = 0; i < 6; i++) {
-            for (int j = 0; j < 6; j++) {
-                result[i * 6 + j] = augmented[i * 12 + (j + 6)];
-            }
-        }
-        
-        delete[] augmented;
-        return true;
-    }
-    Serial.print("Tamanho da matriz não suportado para inversão, tamanho: ");
-    Serial.println(n);
-    return false;
 }
 
 bool AutoLQR::isSystemControllable()
@@ -400,7 +165,7 @@ bool AutoLQR::computeGainMatrix()
 
     // Initialize P as Q only if P hasn't been calculated before
     if (!isPInitialized) {
-        memcpy(P, Q, sizeof(float) * stateSize * stateSize);
+        matrixCopy(Q, P, stateSize * stateSize);
     }
     // Otherwise, keep using the previously calculated P
 
@@ -409,8 +174,8 @@ bool AutoLQR::computeGainMatrix()
     transposeMatrix(A, AT, stateSize, stateSize);
 
     // Iterate to solve DARE: P = A'PA - A'PB(R + B'PB)^(-1)B'PA + Q
-    const int maxIterations = 50; // Increased from 50
-    const float tolerance = 1e-3; // Tighter tolerance
+    const int maxIterations = 50;
+    const float tolerance = 1e-3;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         // temp1 = B'P
@@ -420,9 +185,7 @@ bool AutoLQR::computeGainMatrix()
         matrixMultiply(temp1, B, temp2, controlSize, stateSize, controlSize);
 
         // temp2 = R + B'PB
-        for (int i = 0; i < controlSize * controlSize; i++) {
-            temp2[i] += R[i];
-        }
+        matrixAdd(R, temp2, temp2, controlSize, controlSize);
 
         // Invert (R + B'PB)
         if (!invertMatrix(temp2, temp2, controlSize)) {
@@ -454,9 +217,8 @@ bool AutoLQR::computeGainMatrix()
         matrixMultiply(temp4, A, temp5, stateSize, stateSize, stateSize);
 
         // P_next = A'PA - A'PB * (R + B'PB)^(-1) * B'PA + Q
-        for (int i = 0; i < stateSize * stateSize; i++) {
-            P_next[i] = P_next[i] - temp5[i] + Q[i];
-        }
+        matrixSubtract(P_next, temp5, P_next, stateSize, stateSize);
+        matrixAdd(P_next, Q, P_next, stateSize, stateSize);
 
         // Check convergence
         float diff = 0;
@@ -465,7 +227,7 @@ bool AutoLQR::computeGainMatrix()
         }
 
         // Update P for next iteration
-        memcpy(P, P_next, sizeof(float) * stateSize * stateSize);
+        matrixCopy(P_next, P, stateSize * stateSize);
 
         if (diff < tolerance) {
             break; // Converged
@@ -476,9 +238,7 @@ bool AutoLQR::computeGainMatrix()
     matrixMultiply(BT, P, temp1, controlSize, stateSize, stateSize);
     matrixMultiply(temp1, B, temp2, controlSize, stateSize, controlSize);
 
-    for (int i = 0; i < controlSize * controlSize; i++) {
-        temp2[i] += R[i];
-    }
+    matrixAdd(R, temp2, temp2, controlSize, controlSize);
 
     if (!invertMatrix(temp2, temp2, controlSize)) {
         // Clean up memory
@@ -526,84 +286,6 @@ bool AutoLQR::computeGainMatrixKr()
         }
     }
     return true; 
-    /*
-    float* I_minus_A = new float[stateSize * stateSize]();
-    float* BK = new float[stateSize * stateSize]();
-    float* I_minus_A_minus_BK = new float[stateSize * stateSize]();
-    float* inv_I_minus_A_minus_BK = new float[stateSize * stateSize]();
-    float* inv_times_B = new float[stateSize * controlSize]();
-    float* C_times_inv_times_B = new float[controlSize * controlSize]();
-    
-    // Criar matriz identidade menos A
-    for (int i = 0; i < stateSize; i++) {
-        for (int j = 0; j < stateSize; j++) {
-            if (i == j) {
-                I_minus_A[i * stateSize + j] = 1.0f - A[i * stateSize + j];
-            } else {
-                I_minus_A[i * stateSize + j] = -A[i * stateSize + j];
-            }
-        }
-    }
-    
-    // Calcular BK
-    matrixMultiply(B, K, BK, stateSize, controlSize, stateSize);
-    
-    // Calcular (I-A-BK)
-    for (int i = 0; i < stateSize * stateSize; i++) {
-        I_minus_A_minus_BK[i] = I_minus_A[i] - BK[i];
-    }
-    
-    // Inverter (I-A-BK)
-    if (!invertMatrix(I_minus_A_minus_BK, inv_I_minus_A_minus_BK, stateSize)) {
-        // Limpeza de memória
-        delete[] I_minus_A;
-        delete[] BK;
-        delete[] I_minus_A_minus_BK;
-        delete[] inv_I_minus_A_minus_BK;
-        delete[] inv_times_B;
-        delete[] C_times_inv_times_B;
-        Serial.println("Falha ao inverter (I-A-BK)");
-        return false;
-    }
-    
-    // Calcular (I-A-BK)^(-1)*B
-    matrixMultiply(inv_I_minus_A_minus_BK, B, inv_times_B, stateSize, stateSize, controlSize);
-    
-    // Criando uma matriz C (assumindo identidade nos primeiros estados)
-    float* C = new float[controlSize * stateSize]();
-    for (int i = 0; i < controlSize; i++) {
-        if (i < stateSize) {
-            C[i * stateSize + i] = 1.0f;
-        }
-    }
-    
-    // Calculando C*(I-A-BK)^(-1)*B
-    matrixMultiply(C, inv_times_B, C_times_inv_times_B, controlSize, stateSize, controlSize);
-    
-    // Inverter para obter Kr
-    if (!invertMatrix(C_times_inv_times_B, Kr, controlSize)) {
-        // Limpeza de memória
-        delete[] I_minus_A;
-        delete[] BK;
-        delete[] I_minus_A_minus_BK;
-        delete[] inv_I_minus_A_minus_BK;
-        delete[] inv_times_B;
-        delete[] C_times_inv_times_B;
-        delete[] C;
-        return false;
-    }
-    
-    // Limpeza de memória
-    delete[] I_minus_A;
-    delete[] BK;
-    delete[] I_minus_A_minus_BK;
-    delete[] inv_I_minus_A_minus_BK;
-    delete[] inv_times_B;
-    delete[] C_times_inv_times_B;
-    delete[] C;
-    
-    return true;
-    */
 }
 
 bool AutoLQR::exportKr(float* exportedKr)
@@ -611,7 +293,7 @@ bool AutoLQR::exportKr(float* exportedKr)
     if (!Kr || !exportedKr)
         return false;
     
-    memcpy(exportedKr, Kr, sizeof(float) * controlSize * controlSize);
+    matrixCopy(Kr, exportedKr, controlSize * controlSize);
     return true;
 }
 
@@ -640,9 +322,7 @@ void AutoLQR::estimateFeedforwardGain(float* ffGain, const float* desiredState)
         ffGain[0] = -invBsq * (B[0] * dx[0] + B[1] * dx[1]);
     } else {
         // For other systems, initialize to zero
-        for (int i = 0; i < controlSize; i++) {
-            ffGain[i] = 0;
-        }
+        matrixClear(ffGain, controlSize);
     }
 }
 
@@ -697,7 +377,7 @@ bool AutoLQR::exportGains(float* exportedK)
     if (!K || !exportedK)
         return false;
 
-    memcpy(exportedK, K, sizeof(float) * controlSize * stateSize);
+    matrixCopy(K, exportedK, controlSize * stateSize);
     return true;
 }
 

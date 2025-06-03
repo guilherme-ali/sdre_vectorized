@@ -175,6 +175,10 @@ for i in range(num_steps):
     if 3.0 <= current_time <= 5.0:
         current_desired_vz = 1.0
 
+    current_desired_vx = 0.0
+    current_desired_vy = 0.0
+    current_desired_vz = 0.0
+
     desired_velocities_log.append([current_desired_vx, current_desired_vy, current_desired_vz])
     # --- Fim da definição das velocidades desejadas ---
 
@@ -304,9 +308,9 @@ start_point = ax_anim.scatter(state_log[0, 0], state_log[0, 2], state_log[0, 4],
 body_axis_length = 0.5
 half_axis_len = body_axis_length / 2.0
 
-body_x_line, = ax_anim.plot([], [], [], color='red', lw=3, label='Corpo X (Frente)') 
-body_y_line, = ax_anim.plot([], [], [], color='green', lw=3, label='Corpo Y (Direita)')
-body_z_line, = ax_anim.plot([], [], [], color='blue', lw=3, label='Corpo Z (Cima)')
+body_x_line, = ax_anim.plot([], [], [], color='red', lw=3) 
+body_y_line, = ax_anim.plot([], [], [], color='green', lw=3)
+body_z_line, = ax_anim.plot([], [], [], color='blue', lw=3)
 ax_anim.legend(loc='best')
 
 def init_animation():
@@ -347,8 +351,11 @@ def update_animation(frame_idx):
 anim_interval_ms = 40
 ani = animation.FuncAnimation(fig_anim, update_animation, frames=num_animation_frames,
                               init_func=init_animation, blit=True, interval=anim_interval_ms, repeat=False)
-plt.show()
 
 print("Salvando animação 3D...")
 ani.save('python/outputs/speed_control_sim_animation_3d.mp4', writer='ffmpeg', fps=20, dpi=300)
+print("Animação 3D salva.")
+
+plt.show() # Mova plt.show() para depois de ani.save()
+
 print("Fim do script.")
