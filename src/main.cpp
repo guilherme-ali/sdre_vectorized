@@ -104,12 +104,12 @@ void setup()
     // Define a largura de banda do DLPF para 20 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
 
-    
+    /*
     Serial.println("Calibrando acelerômetro");
     IMU.calibrateAccel();
     Serial.println("Calibrando giroscópio");
     IMU.calibrateGyro();
-    /*
+    
     Serial.println("Calibrando magnetômetro");
     IMU.calibrateMag();
     */
@@ -151,7 +151,7 @@ void loop(){
     my = IMU.getMagY_uT();
     mz = IMU.getMagZ_uT();
 
-    // Atualiza o filtro de Madgwick
+    // Atualiza o filtro de Madgwick 700 microsegundos
     filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
 
     // Obtém os ângulos de Euler (em radianos)
@@ -197,7 +197,7 @@ void loop(){
     // Atualiza o tempo total de execução e o contador para cálculo da média
     total_execution_time += executionTime;
     execution_count++;
-    
+
     if(micros() >= prev_ms + 1000000){
         // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
