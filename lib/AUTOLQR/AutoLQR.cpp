@@ -174,8 +174,8 @@ bool AutoLQR::computeGainMatrix()
     transposeMatrix(A, AT, stateSize, stateSize);
 
     // Iterate to solve DARE: P = A'PA - A'PB(R + B'PB)^(-1)B'PA + Q
-    const int maxIterations = 50;
-    const float tolerance = 1e-3;
+    const int maxIterations = 5000000;
+    const float tolerance = 1e-3f;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         // temp1 = B'P

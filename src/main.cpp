@@ -1,10 +1,13 @@
 #include <AutoLQR.h>
 #include "MPU9250.h"
 #include <MadgwickAHRS.h>
-#include <Wire.h> // Adicionar include para I2C
+#include "KalmanFilter.h"
+#include <Wire.h>
+#include "utils.h" // Adicionar include do arquivo auxiliar
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
+#define MEASUREMENT_DIM 6
 #define gravity 9.81f
 
 unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
@@ -12,11 +15,6 @@ unsigned long total_execution_time = 0; // Tempo total de execução
 unsigned long execution_count = 0; // Contador de execuções
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
-void displayGains();
-void displayIMU();
-void displayStates(float states[]); 
-void displayControlSignals(float u_signal[], float thrust_signal);
-void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff); 
 
 const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
 const float Iyy = 0.00225;  // Momento de inércia em torno do eixo y   
@@ -61,9 +59,9 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 
 // Matrizes de custo
 float Q[STATE_SIZE * STATE_SIZE] = {
-    1, 0, 0, 0, 0, 0,
-    0, 1, 0, 0, 0, 0,
-    0, 0, 1, 0, 0, 0,
+    100, 0, 0, 0, 0, 0,
+    0, 100, 0, 0, 0, 0,
+    0, 0, 100, 0, 0, 0,
     0, 0, 0, 1, 0, 0,
     0, 0, 0, 0, 1, 0,
     0, 0, 0, 0, 0, 1
@@ -75,8 +73,44 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
     0, 0, 1,
 };
 
+// Q_kf: Incerteza do modelo do processo. Quão confiável é nosso modelo matemático?
+float Q_kf[STATE_SIZE * STATE_SIZE] = {
+    0.001, 0, 0, 0, 0, 0,
+    0, 0.001, 0, 0, 0, 0,
+    0, 0, 0.001, 0, 0, 0,
+    0, 0, 0, 0.01, 0, 0,
+    0, 0, 0, 0, 0.01, 0,
+    0, 0, 0, 0, 0, 0.01
+};
+
+// R_kf: Incerteza da medição. Quão confiáveis são os dados do Madgwick/Giroscópio?
+float R_kf[MEASUREMENT_DIM * MEASUREMENT_DIM] = {
+    0.05, 0, 0, 0, 0, 0,
+    0, 0.05, 0, 0, 0, 0,
+    0, 0, 0.05, 0, 0, 0,
+    0, 0, 0, 0.1, 0, 0,
+    0, 0, 0, 0, 0.1, 0,
+    0, 0, 0, 0, 0, 0.1
+};
+
+// C_kf: Matriz de medição. Mapeia o estado para a medição. Como medimos todos os 6 estados, é a identidade.
+float C_kf[MEASUREMENT_DIM * STATE_SIZE] = {
+    1, 0, 0, 0, 0, 0,
+    0, 1, 0, 0, 0, 0,
+    0, 0, 1, 0, 0, 0,
+    0, 0, 0, 1, 0, 0,
+    0, 0, 0, 0, 1, 0,
+    0, 0, 0, 0, 0, 1
+};
+
 // Controlador e variáveis de estado
 AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
+
+// Instância do Filtro de Kalman
+KalmanFilter kf(STATE_SIZE, CONTROL_SIZE, MEASUREMENT_DIM);
+
+float x0_kf[STATE_SIZE] = {0};
+float P0_kf[STATE_SIZE * STATE_SIZE] = {0}; // Será inicializado como identidade
 
 MPU9250 IMU(Wire, 0x68); // Alterado para usar I2C (Wire) e o endereço padrão 0x68
 Madgwick filter;
@@ -109,7 +143,8 @@ void setup()
     IMU.calibrateAccel();
     Serial.println("Calibrando giroscópio");
     IMU.calibrateGyro();
-    
+    */
+    /*
     Serial.println("Calibrando magnetômetro");
     IMU.calibrateMag();
     */
@@ -130,6 +165,11 @@ void setup()
     controller.setCostMatrices(Q, R);
 
     filter.begin(0.01f/samplingTime);
+
+    //Inicializa o Filtro de Kalman
+    MatrixOperations::matrixIdentity(P0_kf, STATE_SIZE); // Incerteza inicial alta
+    kf.init(Ad, Bd, C_kf, Q_kf, R_kf, x0_kf, P0_kf); // Usa Ad e Bd iniciais
+    kf.predict({0});
 }
 
 void loop(){
@@ -162,13 +202,32 @@ void loop(){
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
     float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
-    
-    updateSystemMatrix(roll, pitch, yaw, p, q, r);  
+
+    float z_measurement[STATE_SIZE];
+
+    z_measurement[0] = roll;
+    z_measurement[1] = pitch;
+    z_measurement[2] = yaw;
+    z_measurement[3] = p;
+    z_measurement[4] = q;
+    z_measurement[5] = r;
+
+    kf.update(z_measurement);
+
+    const float* filtered_state = kf.getState();
+
+    updateSystemMatrix(filtered_state[0], filtered_state[1], filtered_state[2],
+                       filtered_state[3], filtered_state[4], filtered_state[5]);
+
+    float roll_madgwick = roll;  // Roll do Madgwick
+    float roll_kalman = filtered_state[0];  // Roll do Kalman
+
+    //updateSystemMatrix(roll, pitch, yaw, p, q, r);  
 
     // Calcula os ganhos ótimos
     controller.computeGains();
 
-    evx = rvx - 0;
+    evx = rvx - 0; // Referência de velocidade desejada (0 para primeiro teste)
     evy = rvy - 0;
     evz = rvz - 0;
 
@@ -186,6 +245,9 @@ void loop(){
     float u[CONTROL_SIZE];
     controller.calculateControl(u);
 
+    //A predição usa o controle calculado no *ciclo anterior*
+    kf.predict(u);
+
     unsigned long endTime = micros(); // Captura o tempo final
     unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
 
@@ -198,7 +260,7 @@ void loop(){
     total_execution_time += executionTime;
     execution_count++;
 
-    if(micros() >= prev_ms + 1000000){
+    if((micros() >= prev_ms + 1000000) & true){
         // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
@@ -212,7 +274,7 @@ void loop(){
         
         
         // Exibe os resultados
-        displayStates(x);
+        displayStates(const_cast<float*>(filtered_state));
         
         //displayGains();
 
@@ -223,6 +285,7 @@ void loop(){
         //displayIMU();
 
         Serial.println("--------------------------------------------------");
+    
 
         prev_ms = micros();
     }
@@ -275,100 +338,5 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
 
     // Atualiza o controlador com a nova matriz de estados
     controller.setStateMatrix(Ad);
-}
-
-void displayGains(){
-
-    float exportedGains[CONTROL_SIZE * STATE_SIZE];
-    controller.exportGains(exportedGains);
-
-    float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
-    controller.exportKr(exportedKr);
-    Serial.println("Ganhos do LQR calculados com sucesso");
-
-    // Exporta os ganhos calculados
-    Serial.println("Ganhos Exportados (K):");
-    for (int i = 0; i < CONTROL_SIZE; i++) {
-        for (int j = 0; j < STATE_SIZE; j++) {
-            Serial.print(exportedGains[i * STATE_SIZE + j], 6);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
-    
-    // Exporta e imprime a matriz Kr
-
-    Serial.println("Matriz Kr (ganho de referência):");
-    for (int i = 0; i < CONTROL_SIZE; i++) {
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            Serial.print(exportedKr[i * CONTROL_SIZE + j], 6);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
-}
-
-void displayIMU() {
-    Serial.print(IMU.getAccelX_mss(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getAccelY_mss(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getAccelZ_mss(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getGyroX_rads(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getGyroY_rads(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getGyroZ_rads(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getMagX_uT(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getMagY_uT(), 6);
-    Serial.print("\t");
-    Serial.print(IMU.getMagZ_uT(), 6);
-    Serial.print("\t");
-    Serial.println(IMU.getTemperature_C(), 6);
-}
-
-void displayStates(float states[]) { 
-    Serial.print("Roll:"); Serial.print(states[0]); // Roll em radianos
-    Serial.print(",Pitch:"); Serial.print(states[1]); // Pitch em radianos
-    Serial.print(",Yaw:"); Serial.print(states[2]); // Yaw em radianos
-    Serial.print(",p:"); Serial.print(states[3]);
-    Serial.print(",q:"); Serial.print(states[4]);
-    Serial.print(",r:"); Serial.println(states[5]);
-}
-
-void displayControlSignals(float u_signal[], float thrust_signal) {
-    Serial.print("u1:"); Serial.print(u_signal[0]);
-    Serial.print(",u2:"); Serial.print(u_signal[1]);
-    Serial.print(",u3:"); Serial.print(u_signal[2]);
-    Serial.print(",T:"); Serial.println(thrust_signal);
-}
-
-void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff) {
-    if (b_coeff == 0.0f || d_coeff == 0.0f) {
-        Serial.println("Erro: Coeficientes b ou d não podem ser zero em displayMotorOmegaSq.");
-        return;
-    }
-
-    float inv_4b = 1.0f / (4.0f * b_coeff);
-    float inv_2b = 1.0f / (2.0f * b_coeff);
-    float inv_4d = 1.0f / (4.0f * d_coeff);
-
-    float u1 = thrust_signal;    // Empuxo total
-    float u2 = u_torques[0];     // Torque de Rolagem
-    float u3 = u_torques[1];     // Torque de Arfagem
-    float u4 = u_torques[2];     // Torque de Guinada
-
-    float w1_sq = u1 * inv_4b           - u3 * inv_2b - u4 * inv_4d;
-    float w2_sq = u1 * inv_4b - u2 * inv_2b           + u4 * inv_4d;
-    float w3_sq = u1 * inv_4b           + u3 * inv_2b - u4 * inv_4d;
-    float w4_sq = u1 * inv_4b + u2 * inv_2b           + u4 * inv_4d;
-
-    Serial.print("w1_sq: "); Serial.print(w1_sq);
-    Serial.print(", w2_sq: "); Serial.print(w2_sq);
-    Serial.print(", w3_sq: "); Serial.print(w3_sq);
-    Serial.print(", w4_sq: "); Serial.println(w4_sq);
 }
 
