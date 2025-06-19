@@ -4,6 +4,7 @@
 #include "KalmanFilter.h"
 #include <Wire.h>
 #include "utils.h" // Adicionar include do arquivo auxiliar
+#include <Adafruit_BMP280.h>
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -73,24 +74,24 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
     0, 0, 1,
 };
 
-// Q_kf: Incerteza do modelo do processo. Quão confiável é nosso modelo matemático?
+// Q_kf: Incerteza do modelo do processo. Quão confiável é nosso modelo matemático? Quanto maior, mais ruído assumimos.
 float Q_kf[STATE_SIZE * STATE_SIZE] = {
-    0.001, 0, 0, 0, 0, 0,
-    0, 0.001, 0, 0, 0, 0,
-    0, 0, 0.001, 0, 0, 0,
-    0, 0, 0, 0.01, 0, 0,
-    0, 0, 0, 0, 0.01, 0,
-    0, 0, 0, 0, 0, 0.01
+    0.001, 0, 0, 0, 0, 0,      // Roll - modelo bem confiável para ângulos
+    0, 0.001, 0, 0, 0, 0,      // Pitch - modelo bem confiável para ângulos  
+    0, 0, 0.01, 0, 0, 0,       // Yaw - menos confiável devido ao magnetômetro
+    0, 0, 0, 0.1, 0, 0,        // p (roll rate) - dinâmica rápida, mais incerteza
+    0, 0, 0, 0, 0.1, 0,        // q (pitch rate) - dinâmica rápida, mais incerteza
+    0, 0, 0, 0, 0, 0.1         // r (yaw rate) - dinâmica rápida, mais incerteza
 };
 
-// R_kf: Incerteza da medição. Quão confiáveis são os dados do Madgwick/Giroscópio?
+// R_kf: Incerteza da medição. Quão confiáveis são os dados do Madgwick/Giroscópio? Quanto maior, mais ruído assumimos.
 float R_kf[MEASUREMENT_DIM * MEASUREMENT_DIM] = {
-    0.05, 0, 0, 0, 0, 0,
-    0, 0.05, 0, 0, 0, 0,
-    0, 0, 0.05, 0, 0, 0,
-    0, 0, 0, 0.1, 0, 0,
-    0, 0, 0, 0, 0.1, 0,
-    0, 0, 0, 0, 0, 0.1
+    0.01, 0, 0, 0, 0, 0,       // Roll do Madgwick - bastante confiável
+    0, 0.01, 0, 0, 0, 0,       // Pitch do Madgwick - bastante confiável
+    0, 0, 0.05, 0, 0, 0,       // Yaw do Madgwick - menos confiável (magnetômetro)
+    0, 0, 0, 0.01, 0, 0,       // p do giroscópio - MPU9250 tem boa precisão
+    0, 0, 0, 0, 0.01, 0,       // q do giroscópio - MPU9250 tem boa precisão  
+    0, 0, 0, 0, 0, 0.01        // r do giroscópio - MPU9250 tem boa precisão
 };
 
 // C_kf: Matriz de medição. Mapeia o estado para a medição. Como medimos todos os 6 estados, é a identidade.
@@ -114,40 +115,18 @@ float P0_kf[STATE_SIZE * STATE_SIZE] = {0}; // Será inicializado como identidad
 
 MPU9250 IMU(Wire, 0x68); // Alterado para usar I2C (Wire) e o endereço padrão 0x68
 Madgwick filter;
-int status;
+
+Adafruit_BMP280 bmp; // I2C
 
 void setup()
 {
     Serial.begin(115200);
 
-    Wire.begin(); // Inicializa a comunicação I2C
-    status = IMU.begin();
-    if (status < 0) {
-        Serial.println("Falha na inicialização da IMU");
-        Serial.print("Status: ");
-        Serial.println(status);
-        if(status != -5){
-            while(1) {}
-        }
-    }
+    // Inicialização do MPU9250
+    start_IMU(IMU);
 
-    // Define o range do acelerômetro para +/-8G 
-    IMU.setAccelRange(MPU9250::ACCEL_RANGE_2G);
-    // Define o range do giroscópio para +/-500 deg/s
-    IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
-    // Define a largura de banda do DLPF para 20 Hz
-    IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
-
-    /*
-    Serial.println("Calibrando acelerômetro");
-    IMU.calibrateAccel();
-    Serial.println("Calibrando giroscópio");
-    IMU.calibrateGyro();
-    */
-    /*
-    Serial.println("Calibrando magnetômetro");
-    IMU.calibrateMag();
-    */
+    // Inicialização do BMP280
+    start_BMP(bmp);
 
     // Parâmetros para discretização
     float samplingTime = 0.01; // Tempo de amostragem em segundos
@@ -216,13 +195,7 @@ void loop(){
 
     const float* filtered_state = kf.getState();
 
-    updateSystemMatrix(filtered_state[0], filtered_state[1], filtered_state[2],
-                       filtered_state[3], filtered_state[4], filtered_state[5]);
-
-    float roll_madgwick = roll;  // Roll do Madgwick
-    float roll_kalman = filtered_state[0];  // Roll do Kalman
-
-    //updateSystemMatrix(roll, pitch, yaw, p, q, r);  
+    updateSystemMatrix(roll, pitch, yaw, p, q, r);  
 
     // Calcula os ganhos ótimos
     controller.computeGains();
@@ -274,7 +247,7 @@ void loop(){
         
         
         // Exibe os resultados
-        displayStates(const_cast<float*>(filtered_state));
+        displayStates(const_cast<float*>(z_measurement));
         
         //displayGains();
 
@@ -285,8 +258,7 @@ void loop(){
         //displayIMU();
 
         Serial.println("--------------------------------------------------");
-    
-
+        
         prev_ms = micros();
     }
 }

@@ -1,11 +1,63 @@
 #include "utils.h"
 #include <AutoLQR.h>
+#include <Wire.h>
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
 
 // Declaração externa do controlador (definido na main.cpp)
 extern AutoLQR controller;
+
+void start_IMU(MPU9250& IMU) {
+    Wire.begin(); // Inicializa a comunicação I2C
+    int status_IMU = IMU.begin();
+    if (status_IMU < 0) {
+        Serial.println("Falha na inicialização da IMU");
+        Serial.print("Status_IMU: ");
+        Serial.println(status_IMU);
+        if(status_IMU != -5){
+            while(1) {}
+        }
+    }
+
+    // Define o range do acelerômetro para +/-8G 
+    IMU.setAccelRange(MPU9250::ACCEL_RANGE_2G);
+    // Define o range do giroscópio para +/-500 deg/s
+    IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
+    // Define a largura de banda do DLPF para 20 Hz
+    IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
+
+    /*
+    Serial.println("Calibrando acelerômetro");
+    IMU.calibrateAccel();
+    Serial.println("Calibrando giroscópio");
+    IMU.calibrateGyro();
+    
+    /*
+    Serial.println("Calibrando magnetômetro");
+    IMU.calibrateMag();
+    */
+}
+
+void start_BMP(Adafruit_BMP280& bmp) {
+    unsigned status_bmp = bmp.begin();
+    if (!status_bmp) {
+        Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
+                        "try a different address!"));
+        Serial.print("SensorID was: 0x"); Serial.println(bmp.sensorID(),16);
+        Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n");
+        Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
+        Serial.print("        ID of 0x60 represents a BME 280.\n");
+        Serial.print("        ID of 0x61 represents a BME 680.\n");
+        while (1) delay(10);
+    }
+
+    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
+}
 
 void displayGains(){
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
