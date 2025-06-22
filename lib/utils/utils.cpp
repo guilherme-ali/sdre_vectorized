@@ -26,6 +26,8 @@ void start_IMU(MPU9250& IMU) {
     IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
     // Define a largura de banda do DLPF para 20 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
+    // Define o divisor de taxa de amostragem para 9 (100 Hz)
+    IMU.setSrd(9);
 
     /*
     Serial.println("Calibrando acelerômetro");
@@ -40,7 +42,7 @@ void start_IMU(MPU9250& IMU) {
 }
 
 void start_BMP(Adafruit_BMP280& bmp) {
-    unsigned status_bmp = bmp.begin();
+    unsigned status_bmp = bmp.begin(0x76);
     if (!status_bmp) {
         Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
                         "try a different address!"));
@@ -108,6 +110,17 @@ void displayIMU() {
     Serial.print(IMU.getMagZ_uT(), 6);
     Serial.print("\t");
     Serial.println(IMU.getTemperature_C(), 6);
+}
+
+void displayBMP(Adafruit_BMP280& bmp) {
+    float temperature = bmp.readTemperature(); // Temperatura em °C
+    float pressure = bmp.readPressure();       // Pressão em Pa
+    float altitude = bmp.readAltitude(1013.25); // Altitude em metros (usando pressão ao nível do mar padrão)
+    
+    Serial.print("Temp_BMP:"); Serial.print(temperature);
+    Serial.print("°C,Press:"); Serial.print(pressure/100.0); // Converte Pa para hPa
+    Serial.print("hPa,Alt:"); Serial.print(altitude);
+    Serial.println("m");
 }
 
 void displayStates(float states[]) { 

@@ -254,6 +254,8 @@ void loop(){
         displayControlSignals(u, thrust); 
 
         displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
+        
+        displayBMP(bmp); 
             
         //displayIMU();
 

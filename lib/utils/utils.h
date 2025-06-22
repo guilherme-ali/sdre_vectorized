@@ -8,6 +8,7 @@
 // Declarações das funções auxiliares
 void displayGains();
 void displayIMU();
+void displayBMP(Adafruit_BMP280& bmp);
 void displayStates(float states[]); 
 void displayControlSignals(float u_signal[], float thrust_signal);
 void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff);
