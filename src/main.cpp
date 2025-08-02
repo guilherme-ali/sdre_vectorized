@@ -317,6 +317,20 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
         }
     }
 
+    // Discretiza a matriz B com aproximação de segunda ordem: Bd = (I*dt + A*dt^2/2)*B = B*dt + A*B*dt^2/2
+    float AB[STATE_SIZE * CONTROL_SIZE] = {0};
+    MatrixOperations::matrixMultiply(A, B, AB, STATE_SIZE, STATE_SIZE, CONTROL_SIZE);
+
+    float dt = samplingTime;
+    float dt2_over_2 = dt * dt * 0.5f;
+
+    for (int i = 0; i < STATE_SIZE; i++) {
+        for (int j = 0; j < CONTROL_SIZE; j++) {
+            int index = i * CONTROL_SIZE + j;
+            Bd[index] = B[index] * dt + AB[index] * dt2_over_2;
+        }
+    }
+
     // Atualiza o controlador com a nova matriz de estados
     controller.setStateMatrix(Ad);
 }
