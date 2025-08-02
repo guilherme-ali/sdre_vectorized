@@ -299,13 +299,20 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     
     // Discretiza a matriz A atualizada
     float samplingTime = 0.01; // Mesmo tempo de amostragem do setup()
+
+    // Calcula A^2 para melhor aproximação da discretização
+    float A2[STATE_SIZE * STATE_SIZE] = {0};
+    MatrixOperations::matrixMultiply(A, A, A2, STATE_SIZE, STATE_SIZE, STATE_SIZE);
     
+    // Ad = I + A*dt + (A^2*dt^2)/2 (aproximação de Taylor de 2ª ordem)
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
             if (i == j) {
-                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * samplingTime;
+                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * samplingTime + 
+                                       A2[i * STATE_SIZE + j] * samplingTime * samplingTime * 0.5f;
             } else {
-                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * samplingTime;
+                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * samplingTime + 
+                                       A2[i * STATE_SIZE + j] * samplingTime * samplingTime * 0.5f;
             }
         }
     }
