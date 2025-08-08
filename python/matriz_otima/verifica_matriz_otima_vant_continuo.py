@@ -108,10 +108,10 @@ amostras_por_segundo = 4000
 t_eval = np.linspace(t_span[0], t_span[1], t_span[1]*amostras_por_segundo) 
 
 # Valores dos três parâmetros para testar (substituindo gama e epsilon)
-amostras = 15  # Reduzido para 2, resultando em (2+1)³ = 27 simulações
-param1_values = np.linspace(0, 1, amostras)  # Parâmetro 1 (para p)
-param2_values = np.linspace(0, 1, amostras)  # Parâmetro 2 (para q) 
-param3_values = np.linspace(0, 1, amostras)  # Parâmetro 3 (para r)
+amostras = 2  # Reduzido para 2, resultando em (2+1)³ = 27 simulações
+param1_values = np.linspace(-10, 10, amostras)  # Parâmetro 1 (para p)
+param2_values = np.linspace(-10, 10, amostras)  # Parâmetro 2 (para q) 
+param3_values = np.linspace(-10, 10, amostras)  # Parâmetro 3 (para r)
 
 # Calcula o total de simulações
 total_simulations = len(param1_values) * len(param2_values) * len(param3_values)
