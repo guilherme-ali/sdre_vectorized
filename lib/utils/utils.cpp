@@ -8,11 +8,13 @@
 // Declaração externa do controlador (definido na main.cpp)
 extern AutoLQR controller;
 
-void start_IMU(MPU9250& IMU) {
+// ============= FUNÇÕES DE INICIALIZAÇÃO =============
+
+void start_IMU_MPU9250(MPU9250& IMU) {
     Wire.begin(); // Inicializa a comunicação I2C
     int status_IMU = IMU.begin();
     if (status_IMU < 0) {
-        Serial.println("Falha na inicialização da IMU");
+        Serial.println("Falha na inicialização do MPU9250");
         Serial.print("Status_IMU: ");
         Serial.println(status_IMU);
         if(status_IMU != -5){
@@ -20,11 +22,13 @@ void start_IMU(MPU9250& IMU) {
         }
     }
 
-    // Define o range do acelerômetro para +/-8G 
+    Serial.println("MPU9250 inicializado com sucesso!");
+
+    // Define o range do acelerômetro para +/-2G 
     IMU.setAccelRange(MPU9250::ACCEL_RANGE_2G);
-    // Define o range do giroscópio para +/-500 deg/s
+    // Define o range do giroscópio para +/-250 deg/s
     IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
-    // Define a largura de banda do DLPF para 20 Hz
+    // Define a largura de banda do DLPF para 92 Hz
     IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
     // Define o divisor de taxa de amostragem para 9 (100 Hz)
     IMU.setSrd(9);
@@ -34,12 +38,113 @@ void start_IMU(MPU9250& IMU) {
     IMU.calibrateAccel();
     Serial.println("Calibrando giroscópio");
     IMU.calibrateGyro();
-    
-    /*
     Serial.println("Calibrando magnetômetro");
     IMU.calibrateMag();
     */
 }
+
+#ifdef USE_MPU6050
+void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
+    // Inicializa I2C com os pinos corretos para ESP32-S2
+    Wire.begin(11, 10); // SDA = GPIO11, SCL = GPIO10
+    
+    if (!mpu.begin(0x68, &Wire)) {
+        Serial.println("Falha ao inicializar MPU6050!");
+        while (1) {
+            delay(10);
+        }
+    }
+    
+    Serial.println("MPU6050 inicializado com sucesso!");
+    
+    // Configuração do MPU6050
+    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    
+    delay(100); // Aguarda estabilização
+}
+
+void calibrate_MPU6050(Adafruit_MPU6050& mpu, float& accel_offset_x, float& accel_offset_y, float& accel_offset_z,
+                       float& gyro_offset_x, float& gyro_offset_y, float& gyro_offset_z) {
+    Serial.println("=========================================");
+    Serial.println("Iniciando calibração do MPU6050...");
+    Serial.println("IMPORTANTE: Deixe o sensor COMPLETAMENTE IMÓVEL!");
+    Serial.println("=========================================");
+    
+    const int numSamples = 1000; // Número de amostras para calibração
+    float accel_sum_x = 0, accel_sum_y = 0, accel_sum_z = 0;
+    float gyro_sum_x = 0, gyro_sum_y = 0, gyro_sum_z = 0;
+    
+    // Aguarda 3 segundos antes de iniciar
+    for(int i = 3; i > 0; i--) {
+        Serial.print("Iniciando em ");
+        Serial.print(i);
+        Serial.println(" segundos...");
+        delay(1000);
+    }
+    
+    Serial.println("Coletando dados...");
+    
+    for (int i = 0; i < numSamples; i++) {
+        sensors_event_t a, g, temp;
+        mpu.getEvent(&a, &g, &temp);
+        
+        accel_sum_x += a.acceleration.x;
+        accel_sum_y += a.acceleration.y;
+        accel_sum_z += a.acceleration.z;
+        
+        gyro_sum_x += g.gyro.x;
+        gyro_sum_y += g.gyro.y;
+        gyro_sum_z += g.gyro.z;
+        
+        if (i % 100 == 0) {
+            Serial.print("Progresso: ");
+            Serial.print((i * 100) / numSamples);
+            Serial.println("%");
+        }
+        
+        delay(2); // Pequeno delay entre leituras
+    }
+    
+    // Calcula as médias
+    accel_offset_x = accel_sum_x / numSamples;
+    accel_offset_y = accel_sum_y / numSamples;
+    accel_offset_z = (accel_sum_z / numSamples) - 9.81; // Subtrai gravidade (sensor está na horizontal, Z aponta para cima)
+    
+    gyro_offset_x = gyro_sum_x / numSamples;
+    gyro_offset_y = gyro_sum_y / numSamples;
+    gyro_offset_z = gyro_sum_z / numSamples;
+    
+    Serial.println("=========================================");
+    Serial.println("Calibração concluída!");
+    Serial.println("Offsets calculados:");
+    Serial.print("Accel X: "); Serial.print(accel_offset_x, 6); Serial.println(" m/s²");
+    Serial.print("Accel Y: "); Serial.print(accel_offset_y, 6); Serial.println(" m/s²");
+    Serial.print("Accel Z: "); Serial.print(accel_offset_z, 6); Serial.println(" m/s²");
+    Serial.print("Gyro X: "); Serial.print(gyro_offset_x, 6); Serial.println(" rad/s");
+    Serial.print("Gyro Y: "); Serial.print(gyro_offset_y, 6); Serial.println(" rad/s");
+    Serial.print("Gyro Z: "); Serial.print(gyro_offset_z, 6); Serial.println(" rad/s");
+    Serial.println("=========================================");
+}
+
+void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az, 
+                  float& gx, float& gy, float& gz,
+                  float accel_offset_x, float accel_offset_y, float accel_offset_z,
+                  float gyro_offset_x, float gyro_offset_y, float gyro_offset_z) {
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+
+    // Aplica os offsets de calibração e converte para as unidades corretas
+    ax = (a.acceleration.x - accel_offset_x) / 9.81; // m/s² para g
+    ay = (a.acceleration.y - accel_offset_y) / 9.81;
+    az = (a.acceleration.z - accel_offset_z) / 9.81; // REMOVI O SINAL NEGATIVO
+
+    gx = g.gyro.x - gyro_offset_x; // Já em rad/s
+    gy = g.gyro.y - gyro_offset_y;
+    gz = g.gyro.z - gyro_offset_z;
+}
+#endif
 
 void start_BMP(Adafruit_BMP280& bmp) {
     unsigned status_bmp = bmp.begin(0x76);
@@ -54,12 +159,36 @@ void start_BMP(Adafruit_BMP280& bmp) {
         while (1) delay(10);
     }
 
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
+    Serial.println("BMP280 inicializado com sucesso!");
+
+    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
+                Adafruit_BMP280::SAMPLING_X2,
+                Adafruit_BMP280::SAMPLING_X16,
+                Adafruit_BMP280::FILTER_X16,
+                Adafruit_BMP280::STANDBY_MS_1);
 }
+
+// ============= FUNÇÕES DE LEITURA =============
+
+void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az, 
+                  float& gx, float& gy, float& gz, float& mx, float& my, float& mz) {
+    IMU.readSensor();
+
+    // Converte os dados para unidades adequadas
+    ax = IMU.getAccelX_mss() / 9.81; // m/s² para g
+    ay = IMU.getAccelY_mss() / 9.81;
+    az = -IMU.getAccelZ_mss() / 9.81;
+
+    gx = IMU.getGyroX_rads(); // Já em rad/s
+    gy = IMU.getGyroY_rads();
+    gz = IMU.getGyroZ_rads();
+
+    mx = IMU.getMagX_uT(); // Magnetômetro em µT
+    my = IMU.getMagY_uT();
+    mz = IMU.getMagZ_uT();
+}
+
+// ============= FUNÇÕES DE DISPLAY =============
 
 void displayGains(){
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
@@ -69,7 +198,6 @@ void displayGains(){
     controller.exportKr(exportedKr);
     Serial.println("Ganhos do LQR calculados com sucesso");
 
-    // Exporta os ganhos calculados
     Serial.println("Ganhos Exportados (K):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
@@ -79,7 +207,6 @@ void displayGains(){
         Serial.println();
     }
     
-    // Exporta e imprime a matriz Kr
     Serial.println("Matriz Kr (ganho de referência):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < CONTROL_SIZE; j++) {
@@ -90,43 +217,44 @@ void displayGains(){
     }
 }
 
-void displayIMU() {
-    Serial.print(IMU.getAccelX_mss(), 6);
+void displayIMU(float ax, float ay, float az, float gx, float gy, float gz, 
+                float mx, float my, float mz, float temp) {
+    Serial.print(ax, 6);
     Serial.print("\t");
-    Serial.print(IMU.getAccelY_mss(), 6);
+    Serial.print(ay, 6);
     Serial.print("\t");
-    Serial.print(IMU.getAccelZ_mss(), 6);
+    Serial.print(az, 6);
     Serial.print("\t");
-    Serial.print(IMU.getGyroX_rads(), 6);
+    Serial.print(gx, 6);
     Serial.print("\t");
-    Serial.print(IMU.getGyroY_rads(), 6);
+    Serial.print(gy, 6);
     Serial.print("\t");
-    Serial.print(IMU.getGyroZ_rads(), 6);
+    Serial.print(gz, 6);
     Serial.print("\t");
-    Serial.print(IMU.getMagX_uT(), 6);
+    Serial.print(mx, 6);
     Serial.print("\t");
-    Serial.print(IMU.getMagY_uT(), 6);
+    Serial.print(my, 6);
     Serial.print("\t");
-    Serial.print(IMU.getMagZ_uT(), 6);
+    Serial.print(mz, 6);
     Serial.print("\t");
-    Serial.println(IMU.getTemperature_C(), 6);
+    Serial.println(temp, 6);
 }
 
 void displayBMP(Adafruit_BMP280& bmp) {
-    float temperature = bmp.readTemperature(); // Temperatura em °C
-    float pressure = bmp.readPressure();       // Pressão em Pa
-    float altitude = bmp.readAltitude(1013.25); // Altitude em metros (usando pressão ao nível do mar padrão)
+    float temperature = bmp.readTemperature();
+    float pressure = bmp.readPressure();
+    float altitude = bmp.readAltitude(1013.25);
     
     Serial.print("Temp_BMP:"); Serial.print(temperature);
-    Serial.print("°C,Press:"); Serial.print(pressure/100.0); // Converte Pa para hPa
+    Serial.print("°C,Press:"); Serial.print(pressure/100.0);
     Serial.print("hPa,Alt:"); Serial.print(altitude);
     Serial.println("m");
 }
 
 void displayStates(float states[]) { 
-    Serial.print("Roll:"); Serial.print(states[0]); // Roll em radianos
-    Serial.print(",Pitch:"); Serial.print(states[1]); // Pitch em radianos
-    Serial.print(",Yaw:"); Serial.print(states[2]); // Yaw em radianos
+    Serial.print("Roll:"); Serial.print(states[0]);
+    Serial.print(",Pitch:"); Serial.print(states[1]);
+    Serial.print(",Yaw:"); Serial.print(states[2]);
     Serial.print(",p:"); Serial.print(states[3]);
     Serial.print(",q:"); Serial.print(states[4]);
     Serial.print(",r:"); Serial.println(states[5]);
@@ -149,10 +277,10 @@ void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, 
     float inv_2b = 1.0f / (2.0f * b_coeff);
     float inv_4d = 1.0f / (4.0f * d_coeff);
 
-    float u1 = thrust_signal;    // Empuxo total
-    float u2 = u_torques[0];     // Torque de Rolagem
-    float u3 = u_torques[1];     // Torque de Arfagem
-    float u4 = u_torques[2];     // Torque de Guinada
+    float u1 = thrust_signal;
+    float u2 = u_torques[0];
+    float u3 = u_torques[1];
+    float u4 = u_torques[2];
 
     float w1_sq = u1 * inv_4b           - u3 * inv_2b - u4 * inv_4d;
     float w2_sq = u1 * inv_4b - u2 * inv_2b           + u4 * inv_4d;

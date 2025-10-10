@@ -3,36 +3,47 @@
 #include <MadgwickAHRS.h>
 #include "KalmanFilter.h"
 #include <Wire.h>
-#include "utils.h" // Adicionar include do arquivo auxiliar
-#include <Adafruit_BMP280.h>
+
+#include "sensor_config.h" // Inclui a configuração do sensor PRIMEIRO
+
+#ifdef USE_MPU9250
+    #include <Adafruit_BMP280.h>
+#endif
+
+#ifdef USE_MPU6050
+    #include <Adafruit_MPU6050.h>
+    #include <Adafruit_Sensor.h>
+#endif
+
+#include "utils.h" // Deve vir DEPOIS das definições de sensor
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
 #define MEASUREMENT_DIM 6
 #define gravity 9.81f
 
-unsigned long max_exectuion_time = 0; // Tempo máximo de execução em microssegundos
-unsigned long total_execution_time = 0; // Tempo total de execução
-unsigned long execution_count = 0; // Contador de execuções
+unsigned long max_exectuion_time = 0;
+unsigned long total_execution_time = 0;
+unsigned long execution_count = 0;
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
 
-const float Ixx = 0.00184;  // Momento de inércia em torno do eixo x
-const float Iyy = 0.00225;  // Momento de inércia em torno do eixo y   
-const float Izz = 0.00338;  // Momento de inércia em torno do eixo z
-const float Ir = 0.00001;   // Momento de inércia do conjunto do motor e hélice
+const float Ixx = 0.00184;
+const float Iyy = 0.00225;
+const float Izz = 0.00338;
+const float Ir = 0.00001;
 const float m = 1;
-float omega_r = 1000; // Velocidade angular do motor
-const float MOTOR_B_COEFF = 0.001; // Exemplo: Coeficiente de empuxo (ex: N/(rad/s)^2)
-const float MOTOR_D_COEFF = 0.001; // Exemplo: Coeficiente de arrasto/torque de guinada (ex: Nm/(rad/s)^2)
+float omega_r = 1000;
+const float MOTOR_B_COEFF = 0.001;
+const float MOTOR_D_COEFF = 0.001;
 
 // Variáveis para armazenar dados do sensor
-float ax, ay, az; // Acelerômetro (g)
-float gx, gy, gz; // Giroscópio (rad/s)
-float mx, my, mz; // Magnetômetro (uT)
+float ax, ay, az;
+float gx, gy, gz;
+float mx, my, mz;
 
-float rvx = 0, rvy = 0, rvz = 0; // Referência de velocidade
-float evx = 0, evy = 0, evz = 0; // Erro de velocidade
+float rvx = 0, rvy = 0, rvz = 0;
+float evx = 0, evy = 0, evz = 0;
 
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
@@ -58,7 +69,6 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 0, 1/Izz
 };
 
-// Matrizes de custo
 float Q[STATE_SIZE * STATE_SIZE] = {
     100, 0, 0, 0, 0, 0,
     0, 100, 0, 0, 0, 0,
@@ -74,62 +84,53 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
     0, 0, 1,
 };
 
-// Q_kf: Incerteza do modelo do processo. Quão confiável é nosso modelo matemático? Quanto maior, mais ruído assumimos.
-float Q_kf[STATE_SIZE * STATE_SIZE] = {
-    0.001, 0, 0, 0, 0, 0,      // Roll - modelo bem confiável para ângulos
-    0, 0.001, 0, 0, 0, 0,      // Pitch - modelo bem confiável para ângulos  
-    0, 0, 0.01, 0, 0, 0,       // Yaw - menos confiável devido ao magnetômetro
-    0, 0, 0, 0.1, 0, 0,        // p (roll rate) - dinâmica rápida, mais incerteza
-    0, 0, 0, 0, 0.1, 0,        // q (pitch rate) - dinâmica rápida, mais incerteza
-    0, 0, 0, 0, 0, 0.1         // r (yaw rate) - dinâmica rápida, mais incerteza
-};
-
-// R_kf: Incerteza da medição. Quão confiáveis são os dados do Madgwick/Giroscópio? Quanto maior, mais ruído assumimos.
-float R_kf[MEASUREMENT_DIM * MEASUREMENT_DIM] = {
-    0.01, 0, 0, 0, 0, 0,       // Roll do Madgwick - bastante confiável
-    0, 0.01, 0, 0, 0, 0,       // Pitch do Madgwick - bastante confiável
-    0, 0, 0.05, 0, 0, 0,       // Yaw do Madgwick - menos confiável (magnetômetro)
-    0, 0, 0, 0.01, 0, 0,       // p do giroscópio - MPU9250 tem boa precisão
-    0, 0, 0, 0, 0.01, 0,       // q do giroscópio - MPU9250 tem boa precisão  
-    0, 0, 0, 0, 0, 0.01        // r do giroscópio - MPU9250 tem boa precisão
-};
-
-// C_kf: Matriz de medição. Mapeia o estado para a medição. Como medimos todos os 6 estados, é a identidade.
-float C_kf[MEASUREMENT_DIM * STATE_SIZE] = {
-    1, 0, 0, 0, 0, 0,
-    0, 1, 0, 0, 0, 0,
-    0, 0, 1, 0, 0, 0,
-    0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 1, 0,
-    0, 0, 0, 0, 0, 1
-};
-
-// Controlador e variáveis de estado
 AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
 
-// Instância do Filtro de Kalman
-KalmanFilter kf(STATE_SIZE, CONTROL_SIZE, MEASUREMENT_DIM);
+// Declaração dos sensores
+#ifdef USE_MPU9250
+    MPU9250 IMU(Wire, 0x68);
+    Adafruit_BMP280 bmp; // BMP280 só está disponível com MPU9250
+#else
+    Adafruit_MPU6050 mpu;
+#endif
 
-float x0_kf[STATE_SIZE] = {0};
-float P0_kf[STATE_SIZE * STATE_SIZE] = {0}; // Será inicializado como identidade
-
-MPU9250 IMU(Wire, 0x68); // Alterado para usar I2C (Wire) e o endereço padrão 0x68
 Madgwick filter;
 
-Adafruit_BMP280 bmp; // I2C
+// Variáveis de calibração do MPU6050
+#ifdef USE_MPU6050
+    float accel_offset_x = 0, accel_offset_y = 0, accel_offset_z = 0;
+    float gyro_offset_x = 0, gyro_offset_y = 0, gyro_offset_z = 0;
+#endif
 
 void setup()
 {
     Serial.begin(115200);
+    delay(1000);
 
-    // Inicialização do MPU9250
-    start_IMU(IMU);
-
-    // Inicialização do BMP280
-    start_BMP(bmp);
+    // Inicialização dos sensores
+    #ifdef USE_MPU9250
+        Serial.println("Usando MPU9250 + BMP280");
+        start_IMU_MPU9250(IMU);
+        start_BMP(bmp);
+    #else
+        Serial.println("Usando MPU6050 (sem BMP280)");
+        start_IMU_MPU6050(mpu);
+        
+        // Calibra o sensor (comente esta linha após calibrar uma vez)
+        calibrate_MPU6050(mpu, accel_offset_x, accel_offset_y, accel_offset_z,
+                          gyro_offset_x, gyro_offset_y, gyro_offset_z);
+        
+        // OU use valores fixos de calibração anteriores:
+        // accel_offset_x = 0.123456;
+        // accel_offset_y = -0.234567;
+        // accel_offset_z = 0.345678;
+        // gyro_offset_x = 0.001234;
+        // gyro_offset_y = -0.002345;
+        // gyro_offset_z = 0.003456;
+    #endif
 
     // Parâmetros para discretização
-    float samplingTime = 0.01; // Tempo de amostragem em segundos
+    float samplingTime = 0.01;
 
     // Discretiza a matriz B
     for (int i = 0; i < STATE_SIZE; i++) {
@@ -138,42 +139,33 @@ void setup()
         }
     }
 
-    // Inicializa o controlador com a dinâmica do sistema
-    updateSystemMatrix(0, 0, 0, 0, 0, 0); // Atualiza a matriz do sistema com os valores iniciais
+    // Inicializa o controlador
+    updateSystemMatrix(0, 0, 0, 0, 0, 0);
     controller.setInputMatrix(Bd);
     controller.setCostMatrices(Q, R);
 
     filter.begin(0.01f/samplingTime);
-
-    //Inicializa o Filtro de Kalman
-    MatrixOperations::matrixIdentity(P0_kf, STATE_SIZE); // Incerteza inicial alta
-    kf.init(Ad, Bd, C_kf, Q_kf, R_kf, x0_kf, P0_kf); // Usa Ad e Bd iniciais
-    kf.predict({0});
+    
+    Serial.println("Sistema inicializado com sucesso!");
+    Serial.println("--------------------------------------------------");
 }
 
 void loop(){
+    unsigned long startTime = micros();
 
-    unsigned long startTime = micros(); // Captura o tempo inicial
+    // Leitura do sensor selecionado
+    #ifdef USE_MPU9250
+        read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
+        filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
+    #else
+        read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
+                     accel_offset_x, accel_offset_y, accel_offset_z,
+                     gyro_offset_x, gyro_offset_y, gyro_offset_z);
+        mx = 0; my = 0; mz = 0;
+        filter.updateIMU(gx, gy, gz, ax, ay, az);
+    #endif
 
-    IMU.readSensor();
-
-    // Converte os dados para unidades adequadas
-    ax = IMU.getAccelX_mss() / 9.81; // m/s² para g
-    ay = IMU.getAccelY_mss() / 9.81;
-    az = -IMU.getAccelZ_mss() / 9.81;
-
-    gx = IMU.getGyroX_rads(); // Já em rad/s
-    gy = IMU.getGyroY_rads();
-    gz = IMU.getGyroZ_rads();
-
-    mx = IMU.getMagX_uT(); // Magnetômetro em µT
-    my = IMU.getMagY_uT();
-    mz = IMU.getMagZ_uT();
-
-    // Atualiza o filtro de Madgwick 700 microsegundos
-    filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
-
-    // Obtém os ângulos de Euler (em radianos)
+    // Obtém os ângulos de Euler
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
@@ -182,33 +174,21 @@ void loop(){
     float q = gy*cos(roll) + gz*sin(roll);
     float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
 
-    float z_measurement[STATE_SIZE];
+    float z_measurement[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
 
-    z_measurement[0] = roll;
-    z_measurement[1] = pitch;
-    z_measurement[2] = yaw;
-    z_measurement[3] = p;
-    z_measurement[4] = q;
-    z_measurement[5] = r;
-
-    kf.update(z_measurement);
-
-    const float* filtered_state = kf.getState();
-
-    updateSystemMatrix(roll, pitch, yaw, p, q, r);  
+    updateSystemMatrix(roll, pitch, yaw, p, q, r);
 
     // Calcula os ganhos ótimos
     controller.computeGains();
 
-    evx = rvx - 0; // Referência de velocidade desejada (0 para primeiro teste)
+    evx = rvx - 0;
     evy = rvy - 0;
     evz = rvz - 0;
 
     float theta_desired = atan(evx / (evz + gravity));
-    float phi_desired = -atan((evy*cos(theta_desired) )/ (evz + gravity));
+    float phi_desired = -atan((evy*cos(theta_desired)) / (evz + gravity));
     float thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
 
-    // Atualiza o estado do sistema e referência
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
     controller.updateState(x);
 
@@ -218,23 +198,17 @@ void loop(){
     float u[CONTROL_SIZE];
     controller.calculateControl(u);
 
-    //A predição usa o controle calculado no *ciclo anterior*
-    kf.predict(u);
+    unsigned long endTime = micros();
+    unsigned long executionTime = endTime - startTime;
 
-    unsigned long endTime = micros(); // Captura o tempo final
-    unsigned long executionTime = endTime - startTime; // Calcula o tempo decorrido
-
-    // Atualiza o tempo máximo de execução
     if (executionTime > max_exectuion_time & executionTime < 50000) {
         max_exectuion_time = executionTime;
     }
     
-    // Atualiza o tempo total de execução e o contador para cálculo da média
     total_execution_time += executionTime;
     execution_count++;
 
     if((micros() >= prev_ms + 1000000) & true){
-        // Calcula o tempo médio de execução
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
         
@@ -245,19 +219,15 @@ void loop(){
         Serial.print("Tempo_Medio:");
         Serial.println(avg_execution_time);
         
-        
-        // Exibe os resultados
         displayStates(const_cast<float*>(z_measurement));
-        
-        //displayGains();
-
-        displayControlSignals(u, thrust); 
-
+        displayControlSignals(u, thrust);
         displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
         
-        displayBMP(bmp); 
-            
-        //displayIMU();
+        #ifdef USE_MPU9250
+            //displayBMP(bmp); // BMP280 só disponível com MPU9250
+        #endif
+        //displayIMU(ax*9.81, ay*9.81, az*9.81, gx, gy, gz, mx, my, mz, 0);
+        //displayGains();
 
         Serial.println("--------------------------------------------------");
         
