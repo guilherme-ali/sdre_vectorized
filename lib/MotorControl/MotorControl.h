@@ -7,9 +7,9 @@
 #define NUM_MOTORS 4
 
 // Pinos GPIO para cada motor
-#define MOTOR_1_PIN 3
+#define MOTOR_1_PIN 5
 #define MOTOR_2_PIN 4
-#define MOTOR_3_PIN 5
+#define MOTOR_3_PIN 3
 #define MOTOR_4_PIN 6
 
 // Configurações de PWM

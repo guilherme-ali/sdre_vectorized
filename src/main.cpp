@@ -35,8 +35,8 @@ const float Izz = 0.00338;
 const float Ir = 0.00001;
 const float m = 0.040;
 float omega_r = 0;
-const float MOTOR_B_COEFF = 0.001;
-const float MOTOR_D_COEFF = 0.001;
+const float MOTOR_B_COEFF = 0.0001;
+const float MOTOR_D_COEFF = 0.0001;
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az;
