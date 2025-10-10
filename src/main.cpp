@@ -16,6 +16,7 @@
 #endif
 
 #include "utils.h" // Deve vir DEPOIS das definições de sensor
+#include "MotorControl.h" // Incluir controle de motores
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -32,8 +33,8 @@ const float Ixx = 0.00184;
 const float Iyy = 0.00225;
 const float Izz = 0.00338;
 const float Ir = 0.00001;
-const float m = 1;
-float omega_r = 1000;
+const float m = 0.040;
+float omega_r = 0;
 const float MOTOR_B_COEFF = 0.001;
 const float MOTOR_D_COEFF = 0.001;
 
@@ -102,6 +103,12 @@ Madgwick filter;
     float gyro_offset_x = 0, gyro_offset_y = 0, gyro_offset_z = 0;
 #endif
 
+// Instância do controlador de motores
+MotorControl motors;
+
+// Flag de segurança
+bool enable_motors = true; // Alterar para true quando quiser ativar os motores
+
 void setup()
 {
     Serial.begin(115200);
@@ -145,6 +152,19 @@ void setup()
     controller.setCostMatrices(Q, R);
 
     filter.begin(0.01f/samplingTime);
+    
+    // Inicializa o sistema de controle de motores
+    motors.begin();
+    motors.setThrottleLimits(0, 50); // Limita a 50% por segurança inicial
+    motors.setOmegaSqLimits(0, 5000); // Ajustar conforme características do motor
+    
+    // Descomentar para calibrar ESCs (fazer apenas uma vez)
+    // motors.calibrateESCs();
+    
+    //Descomentar para armar motores automaticamente
+    if (enable_motors) {
+         motors.armMotors();
+    }
     
     Serial.println("Sistema inicializado com sucesso!");
     Serial.println("--------------------------------------------------");
@@ -198,6 +218,20 @@ void loop(){
     float u[CONTROL_SIZE];
     controller.calculateControl(u);
 
+    // ===== CÁLCULO DOS OMEGA QUADRADOS =====
+    float w1_sq, w2_sq, w3_sq, w4_sq;
+    calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF,
+                          w1_sq, w2_sq, w3_sq, w4_sq);
+    // ======================================
+
+    // ===== CONTROLE DE MOTORES =====
+    if (enable_motors && motors.isArmed()) {
+        motors.setMotorsFromOmegaSq(w1_sq, w2_sq, w3_sq, w4_sq);
+    } else {
+        motors.stopAllMotors();
+    }
+    // ==============================
+
     unsigned long endTime = micros();
     unsigned long executionTime = endTime - startTime;
 
@@ -222,6 +256,9 @@ void loop(){
         displayStates(const_cast<float*>(z_measurement));
         displayControlSignals(u, thrust);
         displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
+        
+        // Exibe valores dos motores
+        motors.printMotorValues();
         
         #ifdef USE_MPU9250
             //displayBMP(bmp); // BMP280 só disponível com MPU9250

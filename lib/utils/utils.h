@@ -1,7 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include "sensor_config.h" // Inclui a configuração do sensor PRIMEIRO
+#include "sensor_config.h"
 #include "MPU9250.h"
 #include <Adafruit_BMP280.h>
 
@@ -29,6 +29,10 @@ void start_BMP(Adafruit_BMP280& bmp);
 void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az, 
                   float& gx, float& gy, float& gz, float& mx, float& my, float& mz);
 
+// Funções de cálculo de controle
+void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff,
+                           float& w1_sq, float& w2_sq, float& w3_sq, float& w4_sq);
+
 // Funções de display
 void displayGains();
 void displayIMU(float ax, float ay, float az, float gx, float gy, float gz, 
@@ -37,5 +41,6 @@ void displayBMP(Adafruit_BMP280& bmp);
 void displayStates(float states[]);
 void displayControlSignals(float u_signal[], float thrust_signal);
 void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff);
+void displayMotorOmegaSqDetailed(float w1_sq, float w2_sq, float w3_sq, float w4_sq);
 
 #endif

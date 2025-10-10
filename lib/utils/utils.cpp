@@ -188,6 +188,50 @@ void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az,
     mz = IMU.getMagZ_uT();
 }
 
+// ============= FUNÇÕES DE CÁLCULO DE CONTROLE =============
+
+void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff,
+                           float& w1_sq, float& w2_sq, float& w3_sq, float& w4_sq) {
+    // Verifica se os coeficientes são válidos
+    if (b_coeff == 0.0f || d_coeff == 0.0f) {
+        Serial.println("ERRO: Coeficientes b ou d não podem ser zero!");
+        w1_sq = w2_sq = w3_sq = w4_sq = 0;
+        return;
+    }
+
+    // Pré-calcula os inversos para otimização
+    float inv_4b = 1.0f / (4.0f * b_coeff);
+    float inv_2b = 1.0f / (2.0f * b_coeff);
+    float inv_4d = 1.0f / (4.0f * d_coeff);
+
+    // Extrai os sinais de controle
+    float u1 = thrust_signal;    // Empuxo total
+    float u2 = u_torques[0];     // Torque de Rolagem (Roll)
+    float u3 = u_torques[1];     // Torque de Arfagem (Pitch)
+    float u4 = u_torques[2];     // Torque de Guinada (Yaw)
+
+    // Calcula omega² para cada motor
+    // Configuração em X:
+    //     M1 (CW)     M2 (CCW)
+    //         \   X   /
+    //          \ / \ /
+    //           X   X
+    //          / \ / \
+    //         /   X   \
+    //     M4 (CCW)    M3 (CW)
+    
+    w1_sq = u1 * inv_4b           - u3 * inv_2b - u4 * inv_4d;  // Frente-Direita
+    w2_sq = u1 * inv_4b - u2 * inv_2b           + u4 * inv_4d;  // Frente-Esquerda
+    w3_sq = u1 * inv_4b           + u3 * inv_2b - u4 * inv_4d;  // Trás-Direita
+    w4_sq = u1 * inv_4b + u2 * inv_2b           + u4 * inv_4d;  // Trás-Esquerda
+
+    // Garante que não há valores negativos (motores não podem girar ao contrário)
+    if (w1_sq < 0) w1_sq = 0;
+    if (w2_sq < 0) w2_sq = 0;
+    if (w3_sq < 0) w3_sq = 0;
+    if (w4_sq < 0) w4_sq = 0;
+}
+
 // ============= FUNÇÕES DE DISPLAY =============
 
 void displayGains(){
@@ -268,27 +312,18 @@ void displayControlSignals(float u_signal[], float thrust_signal) {
 }
 
 void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff) {
-    if (b_coeff == 0.0f || d_coeff == 0.0f) {
-        Serial.println("Erro: Coeficientes b ou d não podem ser zero em displayMotorOmegaSq.");
-        return;
-    }
+    float w1_sq, w2_sq, w3_sq, w4_sq;
+    
+    // Usa a função de cálculo
+    calculateMotorOmegaSq(thrust_signal, u_torques, b_coeff, d_coeff,
+                          w1_sq, w2_sq, w3_sq, w4_sq);
 
-    float inv_4b = 1.0f / (4.0f * b_coeff);
-    float inv_2b = 1.0f / (2.0f * b_coeff);
-    float inv_4d = 1.0f / (4.0f * d_coeff);
+    displayMotorOmegaSqDetailed(w1_sq, w2_sq, w3_sq, w4_sq);
+}
 
-    float u1 = thrust_signal;
-    float u2 = u_torques[0];
-    float u3 = u_torques[1];
-    float u4 = u_torques[2];
-
-    float w1_sq = u1 * inv_4b           - u3 * inv_2b - u4 * inv_4d;
-    float w2_sq = u1 * inv_4b - u2 * inv_2b           + u4 * inv_4d;
-    float w3_sq = u1 * inv_4b           + u3 * inv_2b - u4 * inv_4d;
-    float w4_sq = u1 * inv_4b + u2 * inv_2b           + u4 * inv_4d;
-
-    Serial.print("w1_sq: "); Serial.print(w1_sq);
-    Serial.print(", w2_sq: "); Serial.print(w2_sq);
-    Serial.print(", w3_sq: "); Serial.print(w3_sq);
-    Serial.print(", w4_sq: "); Serial.println(w4_sq);
+void displayMotorOmegaSqDetailed(float w1_sq, float w2_sq, float w3_sq, float w4_sq) {
+    Serial.print("GPIO3(ω²): "); Serial.print(w1_sq, 2);
+    Serial.print(" | GPIO4(ω²): "); Serial.print(w2_sq, 2);
+    Serial.print(" | GPIO5(ω²): "); Serial.print(w3_sq, 2);
+    Serial.print(" | GPIO6(ω²): "); Serial.println(w4_sq, 2);
 }
