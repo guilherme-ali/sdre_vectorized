@@ -17,6 +17,7 @@
 
 #include "utils.h" // Deve vir DEPOIS das definições de sensor
 #include "MotorControl.h" // Incluir controle de motores
+#include "WiFiComm.h" // Comunicação WiFi/UDP
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -106,8 +107,53 @@ Madgwick filter;
 // Instância do controlador de motores
 MotorControl motors;
 
-// Flag de segurança
-bool enable_motors = true; // Alterar para true quando quiser ativar os motores
+// Instância da comunicação WiFi
+WiFiComm wifiComm("ESP-DRONE", "12345678", 2390);
+
+// Variáveis de controle remoto
+bool remote_control_enabled = false;
+CommanderPacket remote_command;
+
+// Flags de segurança
+bool enable_motors = false; // Será ativado quando controle conectar
+bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
+
+// Callbacks para comunicação WiFi
+void onRemoteCommandReceived(CommanderPacket cmd) {
+    remote_command = cmd;
+    remote_control_enabled = true;
+    
+    // Arma os motores na primeira vez que receber comando
+    if (!motors_armed_by_remote && !motors.isArmed()) {
+        motors.armMotors();
+        motors_armed_by_remote = true;
+        Serial.println("⚡ Motores ARMADOS pelo controle remoto!");
+    }
+}
+
+void onClientConnected() {
+    Serial.println("🎮 Controle remoto CONECTADO!");
+    remote_control_enabled = false; // Aguarda primeiro comando
+    enable_motors = true; // Habilita sistema de motores
+}
+
+void onClientDisconnected() {
+    Serial.println("🎮 Controle remoto DESCONECTADO!");
+    remote_control_enabled = false;
+    enable_motors = false; // Desabilita motores por segurança
+    motors_armed_by_remote = false;
+    
+    // Para todos os motores imediatamente
+    motors.stopAllMotors();
+    
+    // Zera comandos por segurança
+    remote_command.roll = 0;
+    remote_command.pitch = 0;
+    remote_command.yaw = 0;
+    remote_command.thrust = 0;
+    
+    Serial.println("⚠️  Motores DESARMADOS por segurança!");
+}
 
 void setup()
 {
@@ -155,15 +201,28 @@ void setup()
     
     // Inicializa o sistema de controle de motores
     motors.begin();
-    motors.setThrottleLimits(0, 50); // Limita a 50% por segurança inicial
-    motors.setOmegaSqLimits(0, 5000); // Ajustar conforme características do motor
+    motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
+    motors.setOmegaSqLimits(0, 10000); // Limite superior de omega² ajustado
     
     // Descomentar para calibrar ESCs (fazer apenas uma vez)
     // motors.calibrateESCs();
     
-    //Descomentar para armar motores automaticamente
-    if (enable_motors) {
-         motors.armMotors();
+    // NÃO armar motores aqui - eles serão armados quando o controle conectar
+    Serial.println("⏸️  Motores em standby - aguardando controle remoto...");
+    
+    // Inicializa comunicação WiFi
+    wifiComm.enableDebug(false);  // Ativa mensagens de debug
+    wifiComm.enableVerbose(false); // Desativa mensagens detalhadas (pode ativar para debug)
+    
+    if (wifiComm.begin()) {
+        Serial.println("✅ WiFi/UDP iniciado com sucesso!");
+        
+        // Configura callbacks
+        wifiComm.onCommandReceived(onRemoteCommandReceived);
+        wifiComm.onClientConnected(onClientConnected);
+        wifiComm.onClientDisconnected(onClientDisconnected);
+    } else {
+        Serial.println("❌ Falha ao iniciar WiFi/UDP!");
     }
     
     Serial.println("Sistema inicializado com sucesso!");
@@ -172,6 +231,9 @@ void setup()
 
 void loop(){
     unsigned long startTime = micros();
+    
+    // Atualiza comunicação WiFi
+    wifiComm.update();
 
     // Leitura do sensor selecionado
     #ifdef USE_MPU9250
@@ -201,18 +263,41 @@ void loop(){
     // Calcula os ganhos ótimos
     controller.computeGains();
 
-    evx = rvx - 0;
-    evy = rvy - 0;
-    evz = rvz - 0;
+    // ===== LÓGICA DE CONTROLE =====
+    float phi_desired, theta_desired, yaw_desired, thrust;
+    
+    if (remote_control_enabled && wifiComm.isClientConnected()) {
+        // Modo de controle remoto via WiFi
+        // Converte comandos do joystick para setpoints em radianos
+        // Joystick vai de -1.0 a 1.0, vamos limitar a ±30 graus (±0.524 rad)
+        const float MAX_ANGLE_RAD = 0.524f; // 30 graus em radianos
+        const float MAX_YAW_RATE_RAD = 1.57f; // 90 graus/s em radianos
+        
+        phi_desired = remote_command.roll * MAX_ANGLE_RAD;        // Roll: ±30°
+        theta_desired = remote_command.pitch * MAX_ANGLE_RAD;     // Pitch: ±30°
+        yaw_desired = remote_command.yaw * MAX_YAW_RATE_RAD;      // Yaw rate: ±90°/s
+        
+        // Thrust: converte de 0-65535 para força em Newtons
+        // Valor mínimo para manter no ar: m*g = 0.04*9.81 = 0.3924 N
+        // Vamos mapear thrust de 0% a 200% do peso
+        thrust = (remote_command.thrust / 65535.0f) * m * gravity * 2.0f;
+    } else {
+        // Modo autônomo (código original)
+        evx = rvx - 0;
+        evy = rvy - 0;
+        evz = rvz - 0;
 
-    float theta_desired = atan(evx / (evz + gravity));
-    float phi_desired = -atan((evy*cos(theta_desired)) / (evz + gravity));
-    float thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
+        theta_desired = atan(evx / (evz + gravity));
+        phi_desired = -atan((evy*cos(theta_desired)) / (evz + gravity));
+        yaw_desired = 0;
+        thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
+    }
+    // ==============================
 
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
     controller.updateState(x);
 
-    float ref[3] = {phi_desired, theta_desired, 0};
+    float ref[3] = {phi_desired, theta_desired, yaw_desired};
     controller.updateReference(ref);
     
     float u[CONTROL_SIZE];
@@ -246,19 +331,72 @@ void loop(){
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
         
-        Serial.print("Tempo_execucao:");
-        Serial.println(executionTime);
-        Serial.print("Tempo_Maximo:");
-        Serial.println(max_exectuion_time);
-        Serial.print("Tempo_Medio:");
-        Serial.println(avg_execution_time);
+        // ===== IMPRESSÃO CONSOLIDADA =====
+        Serial.println("\n========== STATUS DO SISTEMA ==========");
         
+        // Tempo de execução
+        Serial.print("Tempo_execucao: ");
+        Serial.print(executionTime);
+        Serial.println(" μs");
+        Serial.print("Tempo_Maximo: ");
+        Serial.print(max_exectuion_time);
+        Serial.println(" μs");
+        Serial.print("Tempo_Medio: ");
+        Serial.print(avg_execution_time);
+        Serial.println(" μs");
+        
+        // Status de controle
+        if (remote_control_enabled && wifiComm.isClientConnected()) {
+            Serial.println("\n🎮 MODO: CONTROLE REMOTO ATIVO");
+            Serial.println("   Comandos Joystick:");
+            Serial.printf("     Roll:   %+.3f\n", remote_command.roll);
+            Serial.printf("     Pitch:  %+.3f\n", remote_command.pitch);
+            Serial.printf("     Yaw:    %+.3f\n", remote_command.yaw);
+            Serial.printf("     Thrust: %d (%.1f%%)\n", remote_command.thrust, 
+                         (remote_command.thrust / 65535.0f) * 100.0f);
+            Serial.println("   Setpoints (rad):");
+            Serial.printf("     φ_desired: %+.4f\n", phi_desired);
+            Serial.printf("     θ_desired: %+.4f\n", theta_desired);
+            Serial.printf("     ψ_desired: %+.4f\n", yaw_desired);
+            Serial.printf("     Thrust: %.4f N\n", thrust);
+            Serial.println("   Erros:");
+            Serial.printf("     e_φ: %+.4f rad\n", phi_desired - roll);
+            Serial.printf("     e_θ: %+.4f rad\n", theta_desired - pitch);
+            Serial.printf("     e_ψ: %+.4f rad\n", yaw_desired - yaw);
+        } else {
+            Serial.println("\n🤖 MODO: AUTÔNOMO");
+        }
+        
+        // Estados do sistema
+        Serial.println();
         displayStates(const_cast<float*>(z_measurement));
+        
+        // Sinais de controle
         displayControlSignals(u, thrust);
+        
+        // Omega dos motores
         displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
         
-        // Exibe valores dos motores
+        // Valores dos motores
         motors.printMotorValues();
+        
+        // Status dos motores
+        Serial.print("\n🔧 Motores: ");
+        if (motors.isArmed()) {
+            Serial.println("ARMADOS ✅");
+        } else {
+            Serial.println("DESARMADOS ⏸️");
+        }
+        
+        // Status WiFi
+        if (wifiComm.isClientConnected()) {
+            Serial.print("📡 WiFi: CONECTADO | Pacotes: ");
+            Serial.print(wifiComm.getPacketCount());
+            Serial.print(" | Cliente: ");
+            Serial.println(wifiComm.getClientIP());
+        } else {
+            Serial.println("📡 WiFi: Aguardando conexão...");
+        }
         
         #ifdef USE_MPU9250
             //displayBMP(bmp); // BMP280 só disponível com MPU9250
@@ -266,7 +404,7 @@ void loop(){
         //displayIMU(ax*9.81, ay*9.81, az*9.81, gx, gy, gz, mx, my, mz, 0);
         //displayGains();
 
-        Serial.println("--------------------------------------------------");
+        Serial.println("========================================\n");
         
         prev_ms = micros();
     }
