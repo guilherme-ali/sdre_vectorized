@@ -16,7 +16,7 @@ Ir = 0.00001   # Momento de inércia do rotor
 Omega_r = 0.0  # Velocidade angular do rotor
 
 # Condições iniciais [p, q, r, phi, theta, psi]
-x0 = [0.0, 0.0, 0.0, 1, 0.0, 0.0]
+x0 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 
 # Matrizes de ponderação para a função de custo
 Q = np.diag([1, 1, 1, 50.0, 50.0, 50.0])  # 6x6
@@ -37,10 +37,11 @@ num_steps = int((t_span[1] - t_span[0]) / Ts) + 1
 t_eval = np.linspace(t_span[0], t_span[1], num_steps)
 
 # Valores dos parâmetros para testar
-amostras = 20
-param1_values = np.linspace(110, 120, amostras)  # Parâmetro alpha1
-param2_values = np.linspace(-220, -200, amostras)  # Parâmetro alpha2
-param3_values = np.linspace(60, 70, amostras)  # Parâmetro alpha3
+amostras = 75
+extremidades = 100
+param1_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha1
+param2_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha2
+param3_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha3
 
 # --- Geração do ruído para simular vento ---
 # Configuração do ruído
@@ -151,7 +152,7 @@ param_combinations = list(itertools.product(param1_values, param2_values, param3
 
 with tqdm(param_combinations, desc="Simulações", unit="sim", position=0) as pbar:
     for param1, param2, param3 in pbar:
-        pbar.set_description(f"α₁={param1:.2f}, α₂={param2:.2f}, α₃={param3:.2f}")
+        pbar.set_description(f"α1={param1:.2f}, α2={param2:.2f}, α3={param3:.2f}")
         
         max_real_eigenvalue_for_sim = [-np.inf]
         eigenvalues_over_time = []
@@ -240,38 +241,209 @@ if results:
         df.to_csv(csv_filename, index=False)
         print(f"Arquivo CSV salvo como alternativa: {csv_filename}")
 
-    cost_list = [results[key]['cost'] for key in results.keys()]
-    min_cost = min(cost_list)
-    max_cost = max(cost_list)
-    best_params = None
-    worst_params = None
-    for params, result in results.items():
-        if result['cost'] == min_cost:
-            best_params = params
-        if result['cost'] == max_cost:
-            worst_params = params
-
-    print("\n--- Resumo dos Custos Finais ---")
-    print(f"Melhor caso: α₁={best_params[0]:.2f}, α₂={best_params[1]:.2f}, α₃={best_params[2]:.2f}, J={min_cost:.8f}, |λ|_max={results[best_params]['max_eig']:.6f}")
-    print(f"Pior caso: α₁={worst_params[0]:.2f}, α₂={worst_params[1]:.2f}, α₃={worst_params[2]:.2f}, J={max_cost:.8f}, |λ|_max={results[worst_params]['max_eig']:.6f}")
+    # --- NOVOS GRÁFICOS: Custo e Autovalores ---
+    print("\n--- Gerando gráficos de custo e autovalores ---")
     
-    print("\n--- Gerando gráficos ---")
-    state_names = ['p(t)', 'q(t)', 'r(t)', 'φ(t)', 'θ(t)', 'ψ(t)']
-    fig2, axes2 = plt.subplots(2, 3, figsize=(18, 12))
-    axes2 = axes2.flatten()
-    for i in range(6):
-        axes2[i].plot(results[best_params]['t'], results[best_params]['states'][i], 
-                     'b-', linewidth=2, 
-                     label=f'Melhor: α_1={best_params[0]:.2f}, α_2={best_params[1]:.2f}, α_3={best_params[2]:.2f} (J={min_cost:.8f}, |λ|_max={results[best_params]["max_eig"]:.4f})')
-        axes2[i].plot(results[worst_params]['t'], results[worst_params]['states'][i], 
-                     'r-', linewidth=2,
-                     label=f'Pior: α_1={worst_params[0]:.2f}, α_2={worst_params[1]:.2f}, α_3={worst_params[2]:.2f} (J={max_cost:.8f}, |λ|_max={results[worst_params]["max_eig"]:.4f})')
-        axes2[i].set_title(f'Comparação - {state_names[i]}', fontsize=12)
-        axes2[i].set_xlabel('Tempo (s)', fontsize=10)
-        axes2[i].legend(fontsize=8)
-        axes2[i].grid(True)
+    # Função para converter alphas em cores RGB
+    def alphas_to_rgb(alpha1, alpha2, alpha3, min_alpha, max_alpha):
+        """
+        Converte valores de alpha em cores RGB
+        alpha1 -> R (vermelho)
+        alpha2 -> G (verde)
+        alpha3 -> B (azul)
+        """
+        # Normaliza os valores de alpha para o intervalo [0, 1]
+        r = (alpha1 - min_alpha) / (max_alpha - min_alpha)
+        g = (alpha2 - min_alpha) / (max_alpha - min_alpha)
+        b = (alpha3 - min_alpha) / (max_alpha - min_alpha)
+        return (r, g, b)
+    
+    # Calcula os valores mínimos e máximos de alpha
+    min_alpha = min(param1_values.min(), param2_values.min(), param3_values.min())
+    max_alpha = max(param1_values.max(), param2_values.max(), param3_values.max())
+    
+    # Gera cores RGB para cada combinação de parâmetros
+    cores_rgb = [alphas_to_rgb(row['param1_alpha1'], row['param2_alpha2'], row['param3_alpha3'], 
+                                min_alpha, max_alpha) 
+                 for _, row in df.iterrows()]
+    
+    # Gráfico 1: Distribuição dos Custos
+    fig_custos, ax_custos = plt.subplots(figsize=(14, 7))
+    custos = df['custo_total'].values
+    indices = np.arange(len(custos))
+    
+    ax_custos.bar(indices, custos, color=cores_rgb, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax_custos.set_xlabel('Índice da Simulação (ordenado por custo)', fontsize=12)
+    ax_custos.set_ylabel('Custo Total (J)', fontsize=12)
+    ax_custos.set_title('Distribuição dos Custos Totais para Diferentes Combinações de Parâmetros\n(Cores: R=α1, G=α2, B=α3)', 
+                        fontsize=14, fontweight='bold')
+    ax_custos.grid(True, alpha=0.3)
+    
+    # Adicionar linha horizontal para o custo médio
+    custo_medio = np.mean(custos)
+    ax_custos.axhline(y=custo_medio, color='orange', linestyle='--', linewidth=2, 
+                      label=f'Custo Médio: {custo_medio:.6f}')
+    ax_custos.legend(fontsize=10)
+    
+    # Adicionar legenda de cores
+    from matplotlib.patches import Rectangle
+    legend_elements = [
+        Rectangle((0, 0), 1, 1, fc=(1, 0, 0), label=f'α1: {min_alpha:.0f} (preto) → {max_alpha:.0f} (vermelho)'),
+        Rectangle((0, 0), 1, 1, fc=(0, 1, 0), label=f'α2: {min_alpha:.0f} (preto) → {max_alpha:.0f} (verde)'),
+        Rectangle((0, 0), 1, 1, fc=(0, 0, 1), label=f'α3: {min_alpha:.0f} (preto) → {max_alpha:.0f} (azul)')
+    ]
+    ax_custos.legend(handles=legend_elements, loc='upper right', fontsize=9, title='Mapeamento RGB')
+    
     plt.tight_layout()
-    plt.show()
+    plt.savefig('python\\outputs\\distribuicao_custos.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Gráfico de custos salvo: python\\outputs\\distribuicao_custos.png")
+    
+    # Gráfico 2: Distribuição dos Autovalores Máximos
+    fig_autovalores, ax_autovalores = plt.subplots(figsize=(14, 7))
+    autovalores = df['maior_autovalor_abs'].values
+    
+    ax_autovalores.bar(indices, autovalores, color=cores_rgb, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax_autovalores.axhline(y=1.0, color='red', linestyle='--', linewidth=2.5, label='Limite de Estabilidade (|λ| = 1)')
+    ax_autovalores.set_xlabel('Índice da Simulação (ordenado por custo)', fontsize=12)
+    ax_autovalores.set_ylabel('Maior Autovalor Absoluto (|λ|_max)', fontsize=12)
+    ax_autovalores.set_title('Distribuição dos Maiores Autovalores do Sistema em Malha Fechada\n(Cores: R=α1, G=α2, B=α3)', 
+                            fontsize=14, fontweight='bold')
+    ax_autovalores.grid(True, alpha=0.3)
+    
+    # Adicionar texto informativo
+    n_estaveis = sum(1 for av in autovalores if av < 1.0)
+    n_total = len(autovalores)
+    ax_autovalores.text(0.02, 0.98, f'Sistemas Estáveis: {n_estaveis}/{n_total} ({100*n_estaveis/n_total:.1f}%)',
+                       transform=ax_autovalores.transAxes, fontsize=11,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+    
+    # Adicionar legenda de cores
+    ax_autovalores.legend(handles=legend_elements + [Rectangle((0, 0), 1, 1, fc='red', label='Limite de Estabilidade')], 
+                         loc='upper right', fontsize=9, title='Mapeamento RGB')
+    
+    plt.tight_layout()
+    plt.savefig('python\\outputs\\distribuicao_autovalores.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Gráfico de autovalores salvo: python\\outputs\\distribuicao_autovalores.png")
+    
+    # Gráfico 3: Relação entre Custo e Autovalor Máximo
+    fig_relacao, ax_relacao = plt.subplots(figsize=(11, 9))
+    scatter = ax_relacao.scatter(autovalores, custos, c=cores_rgb, 
+                                 s=80, alpha=0.7, edgecolors='black', linewidth=0.8)
+    ax_relacao.set_xlabel('Maior Autovalor Absoluto (|λ|_max)', fontsize=12)
+    ax_relacao.set_ylabel('Custo Total (J)', fontsize=12)
+    ax_relacao.set_title('Relação entre Custo Total e Estabilidade do Sistema\n(Cores: R=α1, G=α2, B=α3)', 
+                         fontsize=14, fontweight='bold')
+    ax_relacao.axvline(x=1.0, color='red', linestyle='--', linewidth=2.5, alpha=0.7, label='Limite de Estabilidade')
+    ax_relacao.grid(True, alpha=0.3)
+    
+    # Adicionar legenda de cores
+    ax_relacao.legend(handles=legend_elements + [Rectangle((0, 0), 1, 1, fc='red', label='Limite de Estabilidade')], 
+                     loc='best', fontsize=9, title='Mapeamento RGB')
+    
+    plt.tight_layout()
+    plt.savefig('python\\outputs\\relacao_custo_autovalor.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Gráfico de relação custo-autovalor salvo: python\\outputs\\relacao_custo_autovalor.png")
+    
+    # Gráfico 4: Histograma de Custos com cores RGB
+    fig_hist_custo, ax_hist_custo = plt.subplots(figsize=(11, 7))
+    
+    # Criar bins e colorir cada barra
+    n_bins = 30
+    counts, bin_edges, patches = ax_hist_custo.hist(custos, bins=n_bins, edgecolor='black', linewidth=0.5)
+    
+    # Colorir cada barra do histograma com a cor média das simulações naquele bin
+    for i, patch in enumerate(patches):
+        # Encontra quais simulações estão neste bin
+        mask = (custos >= bin_edges[i]) & (custos < bin_edges[i+1])
+        if i == len(patches) - 1:  # Último bin inclui o valor máximo
+            mask = (custos >= bin_edges[i]) & (custos <= bin_edges[i+1])
+        
+        if np.any(mask):
+            # Calcula a cor média das simulações neste bin
+            cores_no_bin = [cores_rgb[j] for j in range(len(cores_rgb)) if mask[j]]
+            if cores_no_bin:
+                cor_media = np.mean(cores_no_bin, axis=0)
+                patch.set_facecolor(cor_media)
+                patch.set_alpha(0.7)
+    
+    ax_hist_custo.axvline(x=custo_medio, color='red', linestyle='--', linewidth=2.5, 
+                         label=f'Média: {custo_medio:.6f}')
+    ax_hist_custo.axvline(x=np.median(custos), color='blue', linestyle='--', linewidth=2.5, 
+                         label=f'Mediana: {np.median(custos):.6f}')
+    ax_hist_custo.set_xlabel('Custo Total (J)', fontsize=12)
+    ax_hist_custo.set_ylabel('Frequência', fontsize=12)
+    ax_hist_custo.set_title('Histograma dos Custos Totais\n(Cores médias por bin: R=α1, G=α2, B=α3)', 
+                           fontsize=14, fontweight='bold')
+    ax_hist_custo.legend(fontsize=10)
+    ax_hist_custo.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('python\\outputs\\histograma_custos.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Histograma de custos salvo: python\\outputs\\histograma_custos.png")
+    
+    # Gráfico 5: Histograma de Autovalores com cores RGB
+    fig_hist_auto, ax_hist_auto = plt.subplots(figsize=(11, 7))
+    
+    # Criar bins e colorir cada barra
+    counts, bin_edges, patches = ax_hist_auto.hist(autovalores, bins=n_bins, edgecolor='black', linewidth=0.5)
+    
+    # Colorir cada barra do histograma
+    for i, patch in enumerate(patches):
+        mask = (autovalores >= bin_edges[i]) & (autovalores < bin_edges[i+1])
+        if i == len(patches) - 1:
+            mask = (autovalores >= bin_edges[i]) & (autovalores <= bin_edges[i+1])
+        
+        if np.any(mask):
+            cores_no_bin = [cores_rgb[j] for j in range(len(cores_rgb)) if mask[j]]
+            if cores_no_bin:
+                cor_media = np.mean(cores_no_bin, axis=0)
+                patch.set_facecolor(cor_media)
+                patch.set_alpha(0.7)
+    
+    ax_hist_auto.axvline(x=1.0, color='red', linestyle='--', linewidth=2.5, label='Limite de Estabilidade')
+    ax_hist_auto.axvline(x=np.mean(autovalores), color='blue', linestyle='--', linewidth=2.5, 
+                        label=f'Média: {np.mean(autovalores):.4f}')
+    ax_hist_auto.set_xlabel('Maior Autovalor Absoluto (|λ|_max)', fontsize=12)
+    ax_hist_auto.set_ylabel('Frequência', fontsize=12)
+    ax_hist_auto.set_title('Histograma dos Maiores Autovalores\n(Cores médias por bin: R=α1, G=α2, B=α3)', 
+                          fontsize=14, fontweight='bold')
+    ax_hist_auto.legend(fontsize=10)
+    ax_hist_auto.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('python\\outputs\\histograma_autovalores.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Histograma de autovalores salvo: python\\outputs\\histograma_autovalores.png")
+
+    # Gráfico 6: Visualização 3D da distribuição de parâmetros
+    from mpl_toolkits.mplot3d import Axes3D
+    
+    fig_3d = plt.figure(figsize=(12, 10))
+    ax_3d = fig_3d.add_subplot(111, projection='3d')
+    
+    alpha1_vals = df['param1_alpha1'].values
+    alpha2_vals = df['param2_alpha2'].values
+    alpha3_vals = df['param3_alpha3'].values
+    custos_vals = df['custo_total'].values
+    
+    scatter_3d = ax_3d.scatter(alpha1_vals, alpha2_vals, alpha3_vals, 
+                               c=cores_rgb, s=100, alpha=0.7, 
+                               edgecolors='black', linewidth=0.5)
+    
+    ax_3d.set_xlabel('α1 (Vermelho)', fontsize=11, labelpad=10)
+    ax_3d.set_ylabel('α2 (Verde)', fontsize=11, labelpad=10)
+    ax_3d.set_zlabel('α3 (Azul)', fontsize=11, labelpad=10)
+    ax_3d.set_title('Distribuição 3D dos Parâmetros\n(Tamanho proporcional ao custo)', 
+                    fontsize=14, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    plt.savefig('python\\outputs\\distribuicao_3d_parametros.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print("Gráfico 3D salvo: python\\outputs\\distribuicao_3d_parametros.png")
 else:
     print("Nenhum resultado válido obtido nas simulações.")
     # Cria um DataFrame vazio mesmo sem resultados
