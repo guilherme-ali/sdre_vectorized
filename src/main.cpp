@@ -4,7 +4,7 @@
 #include "KalmanFilter.h"
 #include <Wire.h>
 
-#include "sensor_config.h" // Inclui a configuração do sensor PRIMEIRO
+#include "sensor_config.h" 
 
 #ifdef USE_MPU9250
     #include <Adafruit_BMP280.h>
@@ -18,6 +18,7 @@
 #include "utils.h" // Deve vir DEPOIS das definições de sensor
 #include "MotorControl.h" // Incluir controle de motores
 #include "WiFiComm.h" // Comunicação WiFi/UDP
+#include "led_control.h" // Controle de LEDs e bateria
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -30,14 +31,14 @@ unsigned long execution_count = 0;
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
 
-const float Ixx = 0.00184;
-const float Iyy = 0.00225;
-const float Izz = 0.00338;
-const float Ir = 0.00001;
-const float m = 0.040;
+const float Ixx = 2.1e-5;  // 0.000021 kg·m² (roll)
+const float Iyy = 2.1e-5;  // 0.000021 kg·m² (pitch)
+const float Izz = 3.2e-5;  // 0.000032 kg·m² (yaw)
+const float Ir = 1.0e-6;   // 0.000001 kg·m² (inércia do rotor)
+const float m = 0.040;     // 40g
 float omega_r = 0;
-const float MOTOR_B_COEFF = 0.0001;
-const float MOTOR_D_COEFF = 0.0001;
+const float MOTOR_B_COEFF = 3.9e-5;   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²] 3.9e-8
+const float MOTOR_D_COEFF = 0.05 * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²]
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az;
@@ -100,12 +101,20 @@ Madgwick filter;
 
 // Variáveis de calibração do MPU6050
 #ifdef USE_MPU6050
-    float accel_offset_x = 0, accel_offset_y = 0, accel_offset_z = 0;
-    float gyro_offset_x = 0, gyro_offset_y = 0, gyro_offset_z = 0;
+    // VALORES DE CALIBRAÇÃO - Cole aqui os valores obtidos do script de calibração
+    float accel_offset_x = 0.058127f;  // SUBSTITUIR com valor calibrado
+    float accel_offset_y = -0.148659f;  // SUBSTITUIR com valor calibrado
+    float accel_offset_z = 0.018737f;  // SUBSTITUIR com valor calibrado
+    float gyro_offset_x = -0.011538f;   // SUBSTITUIR com valor calibrado
+    float gyro_offset_y = 0.015284f;   // SUBSTITUIR com valor calibrado
+    float gyro_offset_z = 0.017474f;   // SUBSTITUIR com valor calibrado
 #endif
 
 // Instância do controlador de motores
 MotorControl motors;
+
+// Instância do controle de LEDs e bateria
+LEDControl leds;
 
 // Instância da comunicação WiFi
 WiFiComm wifiComm("ESP-DRONE", "12345678", 2390);
@@ -135,6 +144,9 @@ void onClientConnected() {
     Serial.println("🎮 Controle remoto CONECTADO!");
     remote_control_enabled = false; // Aguarda primeiro comando
     enable_motors = true; // Habilita sistema de motores
+    
+    // Atualiza LEDs
+    leds.setSystemReady(true); // Sistema pronto: LED azul piscando
 }
 
 void onClientDisconnected() {
@@ -152,6 +164,10 @@ void onClientDisconnected() {
     remote_command.yaw = 0;
     remote_command.thrust = 0;
     
+    // Atualiza LEDs
+    leds.setSystemReady(false); // Sistema não está pronto
+    leds.setUDPReceiving(false); // Não está recebendo UDP
+    
     Serial.println("⚠️  Motores DESARMADOS por segurança!");
 }
 
@@ -160,7 +176,31 @@ void setup()
     Serial.begin(115200);
     delay(1000);
 
+    // Inicializa o sistema de LEDs e bateria
+    leds.begin();
+    // LED branco acende automaticamente (hardware) quando há energia
+    
+    // Verifica bateria antes de continuar
+    if (leds.isCriticalBattery()) {
+        Serial.println("❌ BATERIA CRÍTICA! Sistema não iniciará.");
+        Serial.printf("   Tensão atual: %.2fV (mínimo: %.2fV)\n", 
+                     leds.getBatteryVoltage(), BATTERY_CRITICAL_VOLTAGE);
+        leds.setLowPower(true); // LED vermelho aceso
+        while(1) {
+            leds.update();
+            delay(100);
+        }
+    }
+    
+    if (leds.isLowBattery()) {
+        Serial.println("⚠️  AVISO: Bateria baixa!");
+        Serial.printf("   Tensão atual: %.2fV\n", leds.getBatteryVoltage());
+        leds.setLowPower(true); // LED vermelho aceso
+    }
+
     // Inicialização dos sensores
+    leds.setSensorsCalibration(true); // LED azul piscando lentamente
+    
     #ifdef USE_MPU9250
         Serial.println("Usando MPU9250 + BMP280");
         start_IMU_MPU9250(IMU);
@@ -169,18 +209,9 @@ void setup()
         Serial.println("Usando MPU6050 (sem BMP280)");
         start_IMU_MPU6050(mpu);
         
-        // Calibra o sensor (comente esta linha após calibrar uma vez)
-        calibrate_MPU6050(mpu, accel_offset_x, accel_offset_y, accel_offset_z,
-                          gyro_offset_x, gyro_offset_y, gyro_offset_z);
-        
-        // OU use valores fixos de calibração anteriores:
-        // accel_offset_x = 0.123456;
-        // accel_offset_y = -0.234567;
-        // accel_offset_z = 0.345678;
-        // gyro_offset_x = 0.001234;
-        // gyro_offset_y = -0.002345;
-        // gyro_offset_z = 0.003456;
     #endif
+    
+    leds.setSensorsCalibration(false); // Calibração concluída
 
     // Parâmetros para discretização
     float samplingTime = 0.01;
@@ -232,8 +263,30 @@ void setup()
 void loop(){
     unsigned long startTime = micros();
     
+    // Atualiza sistema de LEDs
+    leds.update();
+    
+    // Verifica bateria crítica - desliga motores se necessário
+    if (leds.isCriticalBattery() && motors.isArmed()) {
+        Serial.println("🔋 BATERIA CRÍTICA! Desarmando motores...");
+        motors.stopAllMotors();
+        enable_motors = false;
+        leds.setLowPower(true);
+    } else if (leds.isLowBattery()) {
+        leds.setLowPower(true); // LED vermelho aceso
+    } else {
+        leds.setLowPower(false); // LED vermelho apagado
+    }
+    
     // Atualiza comunicação WiFi
     wifiComm.update();
+    
+    // Atualiza LED de recepção UDP
+    if (wifiComm.isClientConnected()) {
+        leds.setUDPReceiving(true); // LED verde piscando
+    } else {
+        leds.setUDPReceiving(false);
+    };
 
     // Leitura do sensor selecionado
     #ifdef USE_MPU9250
@@ -251,6 +304,7 @@ void loop(){
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
+    yaw = 0 ; // Zera o yaw para evitar deriva
 
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
@@ -397,6 +451,10 @@ void loop(){
         } else {
             Serial.println("📡 WiFi: Aguardando conexão...");
         }
+        
+        // Status da bateria e LEDs
+        Serial.println();
+        leds.printStatus();
         
         #ifdef USE_MPU9250
             //displayBMP(bmp); // BMP280 só disponível com MPU9250
