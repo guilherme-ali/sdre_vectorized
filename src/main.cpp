@@ -208,7 +208,6 @@ void setup()
     #else
         Serial.println("Usando MPU6050 (sem BMP280)");
         start_IMU_MPU6050(mpu);
-        
     #endif
     
     leds.setSensorsCalibration(false); // Calibração concluída
@@ -263,8 +262,14 @@ void setup()
 void loop(){
     unsigned long startTime = micros();
     
+    // ===== PROFILING: Tempos parciais =====
+    unsigned long t_leds, t_battery, t_wifi, t_sensor, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set;
+    unsigned long t_checkpoint = micros();
+    
     // Atualiza sistema de LEDs
     leds.update();
+    t_leds = micros() - t_checkpoint;
+    t_checkpoint = micros();
     
     // Verifica bateria crítica - desliga motores se necessário
     if (leds.isCriticalBattery() && motors.isArmed()) {
@@ -277,9 +282,13 @@ void loop(){
     } else {
         leds.setLowPower(false); // LED vermelho apagado
     }
+    t_battery = micros() - t_checkpoint;
+    t_checkpoint = micros();
     
     // Atualiza comunicação WiFi
     wifiComm.update();
+    t_wifi = micros() - t_checkpoint;
+    t_checkpoint = micros();
     
     // Atualiza LED de recepção UDP
     if (wifiComm.isClientConnected()) {
@@ -291,13 +300,21 @@ void loop(){
     // Leitura do sensor selecionado
     #ifdef USE_MPU9250
         read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
+        t_sensor = micros() - t_checkpoint;
+        t_checkpoint = micros();
         filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
+        t_filter = micros() - t_checkpoint;
+        t_checkpoint = micros();
     #else
         read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
                      accel_offset_x, accel_offset_y, accel_offset_z,
                      gyro_offset_x, gyro_offset_y, gyro_offset_z);
+        t_sensor = micros() - t_checkpoint;
+        t_checkpoint = micros();
         mx = 0; my = 0; mz = 0;
         filter.updateIMU(gx, gy, gz, ax, ay, az);
+        t_filter = micros() - t_checkpoint;
+        t_checkpoint = micros();
     #endif
 
     // Obtém os ângulos de Euler
@@ -311,11 +328,17 @@ void loop(){
     float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
 
     float z_measurement[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
+    t_angles = micros() - t_checkpoint;
+    t_checkpoint = micros();
 
     updateSystemMatrix(roll, pitch, yaw, p, q, r);
+    t_matrix = micros() - t_checkpoint;
+    t_checkpoint = micros();
 
     // Calcula os ganhos ótimos
     controller.computeGains();
+    t_lqr = micros() - t_checkpoint;
+    t_checkpoint = micros();
 
     // ===== LÓGICA DE CONTROLE =====
     float phi_desired, theta_desired, yaw_desired, thrust;
@@ -346,6 +369,8 @@ void loop(){
         yaw_desired = 0;
         thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
     }
+    t_control_logic = micros() - t_checkpoint;
+    t_checkpoint = micros();
     // ==============================
 
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
@@ -356,11 +381,14 @@ void loop(){
     
     float u[CONTROL_SIZE];
     controller.calculateControl(u);
+    // Tempo do cálculo de controle já está incluído em t_lqr acima
 
     // ===== CÁLCULO DOS OMEGA QUADRADOS =====
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF,
                           w1_sq, w2_sq, w3_sq, w4_sq);
+    t_motor_calc = micros() - t_checkpoint;
+    t_checkpoint = micros();
     // ======================================
 
     // ===== CONTROLE DE MOTORES =====
@@ -369,6 +397,7 @@ void loop(){
     } else {
         motors.stopAllMotors();
     }
+    t_motor_set = micros() - t_checkpoint;
     // ==============================
 
     unsigned long endTime = micros();
@@ -388,14 +417,37 @@ void loop(){
         // ===== IMPRESSÃO CONSOLIDADA =====
         Serial.println("\n========== STATUS DO SISTEMA ==========");
         
+        // ===== PROFILING DE DESEMPENHO =====
+        Serial.println("\n⏱️  PROFILING DE EXECUÇÃO:");
+        Serial.printf("   LEDs:            %4lu μs (%5.1f%%)\n", t_leds, (t_leds * 100.0f) / executionTime);
+        Serial.printf("   Bateria:         %4lu μs (%5.1f%%)\n", t_battery, (t_battery * 100.0f) / executionTime);
+        Serial.printf("   WiFi/UDP:        %4lu μs (%5.1f%%)\n", t_wifi, (t_wifi * 100.0f) / executionTime);
+        Serial.printf("   Leitura Sensor:  %4lu μs (%5.1f%%)\n", t_sensor, (t_sensor * 100.0f) / executionTime);
+        Serial.printf("   Filtro Madgwick: %4lu μs (%5.1f%%)\n", t_filter, (t_filter * 100.0f) / executionTime);
+        Serial.printf("   Cálc. Ângulos:   %4lu μs (%5.1f%%)\n", t_angles, (t_angles * 100.0f) / executionTime);
+        Serial.printf("   Matriz Sistema:  %4lu μs (%5.1f%%)\n", t_matrix, (t_matrix * 100.0f) / executionTime);
+        Serial.printf("   LQR (Ganhos):    %4lu μs (%5.1f%%)\n", t_lqr, (t_lqr * 100.0f) / executionTime);
+        Serial.printf("   Lógica Controle: %4lu μs (%5.1f%%)\n", t_control_logic, (t_control_logic * 100.0f) / executionTime);
+        Serial.printf("   Cálc. Omega²:    %4lu μs (%5.1f%%)\n", t_motor_calc, (t_motor_calc * 100.0f) / executionTime);
+        Serial.printf("   Set Motores:     %4lu μs (%5.1f%%)\n", t_motor_set, (t_motor_set * 100.0f) / executionTime);
+        Serial.println("   -----------------------------------");
+        
+        unsigned long sum_profiled = t_leds + t_battery + t_wifi + t_sensor + t_filter + 
+                                     t_angles + t_matrix + t_lqr + t_control_logic + 
+                                     t_motor_calc + t_motor_set;
+        unsigned long overhead = executionTime - sum_profiled;
+        Serial.printf("   Soma Medida:     %4lu μs (%5.1f%%)\n", sum_profiled, (sum_profiled * 100.0f) / executionTime);
+        Serial.printf("   Overhead/Outros: %4lu μs (%5.1f%%)\n", overhead, (overhead * 100.0f) / executionTime);
+        
         // Tempo de execução
-        Serial.print("Tempo_execucao: ");
+        Serial.println("\n📊 ESTATÍSTICAS DE TEMPO:");
+        Serial.print("   Tempo_execucao: ");
         Serial.print(executionTime);
         Serial.println(" μs");
-        Serial.print("Tempo_Maximo: ");
+        Serial.print("   Tempo_Maximo: ");
         Serial.print(max_exectuion_time);
         Serial.println(" μs");
-        Serial.print("Tempo_Medio: ");
+        Serial.print("   Tempo_Medio: ");
         Serial.print(avg_execution_time);
         Serial.println(" μs");
         
@@ -453,8 +505,8 @@ void loop(){
         }
         
         // Status da bateria e LEDs
-        Serial.println();
-        leds.printStatus();
+        //Serial.println();
+        //leds.printStatus();
         
         #ifdef USE_MPU9250
             //displayBMP(bmp); // BMP280 só disponível com MPU9250
