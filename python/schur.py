@@ -311,9 +311,9 @@ def exemplo_sistema_6x6():
         [0.0,  0.0,  0.0],   # posição x não afetada diretamente
         [0.0,  0.0,  0.0],   # posição y não afetada diretamente
         [0.0,  0.0,  0.0],   # posição z não afetada diretamente
-        [0.1,  0.0,  0.0],   # u1 afeta vx
-        [0.0,  0.1,  0.0],   # u2 afeta vy
-        [0.0,  0.0,  0.1]    # u3 afeta vz
+        [0.001,  0.0,  0.0],   # u1 afeta vx
+        [0.0,  0.001,  0.0],   # u2 afeta vy
+        [0.0,  0.0,  0.001]    # u3 afeta vz
     ])
     
     print("\nMatriz A (6x6):")
@@ -332,8 +332,8 @@ def exemplo_sistema_6x6():
     
     # Matrizes de custo
     # Q: penaliza posições e velocidades
-    Q = np.diag([100.0, 100.0, 100.0,  # pesos para x, y, z
-                 10.0,  10.0,  10.0])   # pesos para vx, vy, vz
+    Q = np.diag([1000.0, 1000.0, 1000.0,  # pesos para x, y, z
+                 1.0,  1.0,  1.0])   # pesos para vx, vy, vz
     
     # R: penaliza o uso de controle (3x3)
     R = np.diag([1.0, 1.0, 1.0])
