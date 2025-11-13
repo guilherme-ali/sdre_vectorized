@@ -15,9 +15,10 @@ PASSO 5: Calcular ganho de realimentação K = inv(R + B^T*P*B) * B^T*P*A
 """
 
 import numpy as np
-from scipy.linalg import ordqz
+from scipy.linalg import ordqz, solve_discrete_are
 import matplotlib.pyplot as plt
 import time
+
 
 
 def dare_schur(A, B, Q, R):

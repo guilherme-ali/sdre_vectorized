@@ -137,10 +137,17 @@ private:
     float* reference; ///< To store reference values
 
     /**
-     * @brief Compute the optimal gain matrix by solving DARE
+     * @brief Compute the optimal gain matrix by solving DARE (iterative method)
      * @return true if successful, false otherwise
      */
     bool computeGainMatrix();
+    
+    /**
+     * @brief Compute the optimal gain matrix using Schur method (QZ decomposition)
+     * Solves DARE using generalized Schur decomposition for direct solution
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixSchur();
 };
 
 #endif

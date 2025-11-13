@@ -1,5 +1,6 @@
 #include "AutoLQR.h"
 #include <math.h>
+#include <ArduinoEigen.h>
 
 AutoLQR::AutoLQR(int stateSize, int controlSize)
     : stateSize(stateSize)
@@ -74,7 +75,8 @@ void AutoLQR::setGains(const float* inputK)
 
 bool AutoLQR::computeGains()
 {
-    bool K_flag = computeGainMatrix();
+    // Usa método de Schur ao invés do método iterativo
+    bool K_flag = computeGainMatrixSchur();
     if (!K_flag)
         return false;
     
@@ -530,6 +532,351 @@ bool AutoLQR::computeGainMatrix()
     Serial.println(F("======================================================================\n"));
     } // Fim do if (should_print)
 
+    return true;
+}
+
+bool AutoLQR::computeGainMatrixSchur()
+{
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    // Verifica controlabilidade
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    // Controle de frequência de print (1Hz)
+    static unsigned long last_print_time = 0;
+    unsigned long current_time = millis();
+    bool should_print = (current_time - last_print_time >= 1000);
+    
+    // ========================================================================
+    // Medição de tempo - início
+    // ========================================================================
+    unsigned long t_start = micros();
+    unsigned long t_alloc_start, t_alloc_end;
+    unsigned long t_check_init, t_init_P, t_transpose_start, t_transpose_end, t_iter_start;
+    unsigned long t_mult_total = 0, t_invert_total = 0, t_add_total = 0, t_conv_total = 0;
+    unsigned long t_mult1 = 0, t_mult2 = 0, t_mult3 = 0, t_mult4 = 0, t_mult5 = 0, t_mult6 = 0, t_mult7 = 0;
+    int iteration_count = 0;
+    
+    // ========================================================================
+    // PASSO 0: Preparação - Mapeamento para Eigen
+    // ========================================================================
+    unsigned long t_step = micros();
+    
+    // Mapeia arrays para matrizes Eigen (sem cópia)
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        A_map(A, stateSize, stateSize);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        B_map(B, stateSize, controlSize);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        Q_map(Q, stateSize, stateSize);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        R_map(R, controlSize, controlSize);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        P_map(P, stateSize, stateSize);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> 
+        K_map(K, controlSize, stateSize);
+
+    t_alloc_start = micros() - t_step;
+
+    // ========================================================================
+    // PASSO 1: Construir matrizes H e J para problema generalizado (2n x 2n)
+    // ========================================================================
+    // H * z = λ * J * z
+    // onde autovalores λ com |λ| < 1 correspondem ao subespaço estável
+    
+    const int n = stateSize;
+    const int n2 = 2 * n;
+    
+    // Calcula G = B * inv(R) * B^T
+    t_step = micros();
+    Eigen::MatrixXf R_inv = R_map.inverse();
+    Eigen::MatrixXf G = B_map * R_inv * B_map.transpose();
+    unsigned long t_build_G = micros() - t_step;
+    
+    // Monta matriz H (Hamiltoniana superior - 2n x 2n)
+    // H = [A    0]
+    //     [-Q   I]
+    t_step = micros();
+    Eigen::MatrixXf H(n2, n2);
+    H.block(0, 0, n, n) = A_map;                           // Bloco superior esquerdo: A
+    H.block(0, n, n, n).setZero();                         // Bloco superior direito: 0
+    H.block(n, 0, n, n) = -Q_map;                          // Bloco inferior esquerdo: -Q
+    H.block(n, n, n, n).setIdentity();                     // Bloco inferior direito: I
+    unsigned long t_build_H = micros() - t_step;
+    
+    // Monta matriz J (Hamiltoniana inferior - 2n x 2n)
+    // J = [I   G]
+    //     [0  A^T]
+    t_step = micros();
+    Eigen::MatrixXf J(n2, n2);
+    J.block(0, 0, n, n).setIdentity();                     // Bloco superior esquerdo: I
+    J.block(0, n, n, n) = G;                               // Bloco superior direito: G
+    J.block(n, 0, n, n).setZero();                         // Bloco inferior esquerdo: 0
+    J.block(n, n, n, n) = A_map.transpose();               // Bloco inferior direito: A^T
+    unsigned long t_build_J = micros() - t_step;
+    
+    // ========================================================================
+    // PASSO 2: Decomposição QZ Generalizada (Schur Generalizado)
+    // ========================================================================
+    // Resolve o problema de autovalores generalizado: H*v = λ*J*v
+    // Eigen usa RealQZ ou ComplexQZ dependendo do tipo
+    
+    t_step = micros();
+    Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges(H, J);
+    
+    if (ges.info() != Eigen::Success) {
+        Serial.println(F("Erro na decomposição QZ generalizada"));
+        return false;
+    }
+    
+    // Autovalores: lambda = alpha / beta
+    Eigen::VectorXcf alpha = ges.alphas();
+    Eigen::VectorXcf beta = ges.betas();
+    unsigned long t_qz_decomp = micros() - t_step;
+    
+    // ========================================================================
+    // PASSO 3: Ordenar autovalores estáveis (|λ| < 1) - "Inside Unit Circle"
+    // ========================================================================
+    
+    t_step = micros();
+    std::vector<int> stable_indices;
+    stable_indices.reserve(n);
+    
+    for (int i = 0; i < n2; i++) {
+        // Evita divisão por zero
+        if (std::abs(beta(i)) > 1e-10f) {
+            std::complex<float> eigenvalue = alpha(i) / beta(i);
+            float magnitude = std::abs(eigenvalue);
+            
+            // Seleciona autovalores dentro do círculo unitário (estáveis)
+            if (magnitude < 1.0f) {
+                stable_indices.push_back(i);
+            }
+        }
+    }
+    
+    // Verifica se temos exatamente n autovalores estáveis
+    if (stable_indices.size() != static_cast<size_t>(n)) {
+        Serial.print(F("Erro: encontrados "));
+        Serial.print(stable_indices.size());
+        Serial.print(F(" autovalores estáveis, esperados "));
+        Serial.println(n);
+        return false;
+    }
+    unsigned long t_sort_eig = micros() - t_step;
+    
+    // ========================================================================
+    // PASSO 4: Extrair subespaço invariante estável
+    // ========================================================================
+    // Matriz de autovetores Z (2n x 2n)
+    t_step = micros();
+    Eigen::MatrixXcf Z = ges.eigenvectors();
+    
+    // Particiona Z em blocos n x n, usando apenas colunas correspondentes
+    // aos autovalores estáveis ordenados
+    // Z = [U11  U12]
+    //     [U21  U22]
+    
+    Eigen::MatrixXcf U11(n, n);
+    Eigen::MatrixXcf U21(n, n);
+    
+    for (int j = 0; j < n; j++) {
+        int idx = stable_indices[j];
+        U11.col(j) = Z.block(0, idx, n, 1);  // Bloco superior
+        U21.col(j) = Z.block(n, idx, n, 1);  // Bloco inferior
+    }
+    unsigned long t_extract_subspace = micros() - t_step;
+    
+    // ========================================================================
+    // PASSO 5: Calcular solução P da DARE
+    // ========================================================================
+    // P = U21 * inv(U11)
+    
+    t_step = micros();
+    Eigen::MatrixXcf P_complex = U21 * U11.inverse();
+    
+    // Converte para real (a solução deve ser real para sistema real)
+    // Pega apenas a parte real e simetriza
+    Eigen::MatrixXf P_result = P_complex.real();
+    P_result = (P_result + P_result.transpose()) / 2.0f;
+    
+    // Copia resultado para array P
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            P_map(i, j) = P_result(i, j);
+        }
+    }
+    unsigned long t_calc_P = micros() - t_step;
+    
+    // ========================================================================
+    // PASSO 6: Calcular ganho de realimentação K
+    // ========================================================================
+    // K = (R + B^T*P*B)^{-1} * B^T*P*A
+    
+    t_step = micros();
+    Eigen::MatrixXf BT_P = B_map.transpose() * P_map;
+    Eigen::MatrixXf term = R_map + BT_P * B_map;
+    Eigen::MatrixXf K_result = term.inverse() * BT_P * A_map;
+    
+    // Copia resultado para array K
+    for (int i = 0; i < controlSize; i++) {
+        for (int j = 0; j < stateSize; j++) {
+            K_map(i, j) = K_result(i, j);
+        }
+    }
+    unsigned long t_calc_K = micros() - t_step;
+    
+    // ========================================================================
+    // Verificação: autovalores do sistema em malha fechada
+    // ========================================================================
+    t_step = micros();
+    Eigen::MatrixXf A_cl = A_map - B_map * K_map;
+    Eigen::EigenSolver<Eigen::MatrixXf> es(A_cl);
+    
+    bool stable = true;
+    for (int i = 0; i < n; i++) {
+        std::complex<float> eig = es.eigenvalues()(i);
+        if (std::abs(eig) >= 1.0f) {
+            stable = false;
+            break;
+        }
+    }
+    
+    if (!stable) {
+        Serial.println(F("Aviso: sistema em malha fechada pode ser instável"));
+    }
+    unsigned long t_verify = micros() - t_step;
+    
+    // ========================================================================
+    // Tempo total
+    // ========================================================================
+    unsigned long t_total = micros() - t_start;
+    
+    // ========================================================================
+    // PRINT DETALHADO DE PERFORMANCE (a cada 1 segundo)
+    // ========================================================================
+    if (should_print) {
+        last_print_time = current_time;
+        
+        Serial.println(F("\n============ PERFORMANCE ANALYSIS: computeGainMatrixSchur ============"));
+        
+        Serial.println(F("\n--- MÉTODO DE SCHUR (QZ Generalizado) ---"));
+        Serial.print(F("Dimensão do sistema: n = "));
+        Serial.print(n);
+        Serial.print(F(", Problema aumentado: 2n = "));
+        Serial.println(n2);
+        
+        Serial.println(F("\n--- FASE 1: PREPARAÇÃO ---"));
+        Serial.print(F("1. Mapeamento Eigen (sem cópia): "));
+        Serial.print(t_alloc_start / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 2: CONSTRUÇÃO DAS HAMILTONIANAS ---"));
+        Serial.print(F("2. Cálculo de G = B*inv(R)*B^T: "));
+        Serial.print(t_build_G / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.print(F("3. Montagem matriz H (2n x 2n): "));
+        Serial.print(t_build_H / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.print(F("4. Montagem matriz J (2n x 2n): "));
+        Serial.print(t_build_J / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        float t_hamiltonian = (t_build_G + t_build_H + t_build_J) / 1000.0;
+        Serial.print(F("Subtotal Hamiltonianas: "));
+        Serial.print(t_hamiltonian, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 3: DECOMPOSIÇÃO QZ (CRÍTICA) ---"));
+        Serial.print(F("5. Eigen::GeneralizedEigenSolver: "));
+        Serial.print(t_qz_decomp / 1000.0, 3);
+        Serial.print(F(" ms ("));
+        Serial.print((t_qz_decomp / (float)t_total) * 100, 1);
+        Serial.println(F("%)"));
+        
+        Serial.println(F("\n--- FASE 4: ORDENAÇÃO E EXTRAÇÃO ---"));
+        Serial.print(F("6. Ordenar autovalores estáveis (|λ| < 1): "));
+        Serial.print(t_sort_eig / 1000.0, 3);
+        Serial.println(F(" ms"));
+        Serial.print(F("   Autovalores estáveis encontrados: "));
+        Serial.print(stable_indices.size());
+        Serial.print(F(" / "));
+        Serial.println(n);
+        
+        Serial.print(F("7. Extrair subespaço invariante (U11, U21): "));
+        Serial.print(t_extract_subspace / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 5: SOLUÇÃO DA DARE ---"));
+        Serial.print(F("8. Calcular P = U21 * inv(U11): "));
+        Serial.print(t_calc_P / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 6: GANHO LQR ---"));
+        Serial.print(F("9. Calcular K = inv(R+B^T*P*B)*B^T*P*A: "));
+        Serial.print(t_calc_K / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 7: VERIFICAÇÃO ---"));
+        Serial.print(F("10. Verificar estabilidade (malha fechada): "));
+        Serial.print(t_verify / 1000.0, 3);
+        Serial.println(F(" ms"));
+        Serial.print(F("    Sistema em malha fechada: "));
+        Serial.println(stable ? F("ESTÁVEL") : F("INSTÁVEL"));
+        
+        Serial.println(F("\n--- RESUMO GERAL ---"));
+        Serial.print(F("TEMPO TOTAL: "));
+        Serial.print(t_total / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\nDistribuição por fase:"));
+        float total_ms = t_total / 1000.0;
+        
+        Serial.print(F("  Preparação:          "));
+        Serial.print((t_alloc_start / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.print(F("  Hamiltonianas:       "));
+        Serial.print((t_hamiltonian / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.print(F("  Decomposição QZ:     "));
+        Serial.print((t_qz_decomp / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("% (GARGALO)"));
+        
+        Serial.print(F("  Ordenação/Extração:  "));
+        Serial.print(((t_sort_eig + t_extract_subspace) / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.print(F("  Solução P:           "));
+        Serial.print((t_calc_P / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.print(F("  Ganho K:             "));
+        Serial.print((t_calc_K / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.print(F("  Verificação:         "));
+        Serial.print((t_verify / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.println(F("\n--- COMPARAÇÃO COM MÉTODO ITERATIVO ---"));
+        Serial.println(F("Vantagens do Schur:"));
+        Serial.println(F("  + Convergência garantida (sem iterações)"));
+        Serial.println(F("  + Solução única e numericamente estável"));
+        Serial.println(F("  + Não depende de chute inicial"));
+        Serial.println(F("Desvantagens:"));
+        Serial.println(F("  - Maior custo computacional para sistemas pequenos"));
+        Serial.println(F("  - Requer decomposição QZ (operação densa)"));
+        
+        Serial.println(F("======================================================================\n"));
+    }
+    
     return true;
 }
 
