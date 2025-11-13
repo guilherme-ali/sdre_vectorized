@@ -15,7 +15,7 @@ PASSO 5: Calcular ganho de realimentação K = inv(R + B^T*P*B) * B^T*P*A
 """
 
 import numpy as np
-from scipy.linalg import ordqz, solve_discrete_are
+from scipy.linalg import ordqz, solve_discrete_are, qr
 import matplotlib.pyplot as plt
 import time
 
@@ -133,6 +133,163 @@ def dare_schur(A, B, Q, R):
     # ========================================================================
     # Sistema em malha fechada: x[k+1] = (A - B*K)*x[k]
     # Os autovalores devem ter magnitude < 1 para garantir estabilidade
+    A_cl = A - B @ K
+    eig_cl = np.linalg.eigvals(A_cl)
+    
+    return P, K, eig_cl
+
+
+def dare_van_dooren(A, B, Q, R):
+    """
+    Resolve a DARE usando o método de van Dooren (Extended Symplectic Pencil).
+    
+    Este método forma o pencil simplétictico estendido (2n+m) × (2n+m):
+    
+    H - λJ onde:
+    
+    H = [ A    0    B ]       J = [ E   0   B ]
+        [-Q   E^H  -S ]           [ 0  A^H  0 ]
+        [S^H   0    R ]           [ 0 -B^H  0 ]
+    
+    Para o caso padrão (E=I, S=0):
+    
+    H = [ A    0    B ]       J = [ I   0   B ]
+        [-Q   I    0 ]           [ 0  A^T  0 ]
+        [ 0   0    R ]           [ 0  -B^T 0 ]
+    
+    Referência: P. van Dooren, "A Generalized Eigenvalue Approach For Solving
+    Riccati Equations", SIAM J. Sci. Stat. Comput., Vol.2(2), 1981.
+    
+    Parâmetros:
+    -----------
+    A : array_like, shape (n, n)
+        Matriz de estados do sistema discreto
+    B : array_like, shape (n, m)
+        Matriz de entrada do sistema
+    Q : array_like, shape (n, n)
+        Matriz de peso dos estados (semi-definida positiva)
+    R : array_like, shape (m, m)
+        Matriz de peso das entradas (definida positiva)
+    
+    Retorna:
+    --------
+    P : ndarray, shape (n, n)
+        Solução da DARE (matriz simétrica positiva definida)
+    K : ndarray, shape (m, n)
+        Ganho de realimentação ótimo LQR
+    eig_cl : ndarray, shape (n,)
+        Autovalores do sistema em malha fechada
+    """
+    
+    # ========================================================================
+    # PASSO 0: Preparação
+    # ========================================================================
+    A = np.asarray(A, dtype=float)
+    B = np.asarray(B, dtype=float)
+    Q = np.asarray(Q, dtype=float)
+    R = np.asarray(R, dtype=float)
+    
+    n = A.shape[0]  # Dimensão do estado
+    m = B.shape[1] if B.ndim > 1 else 1  # Número de entradas
+    
+    # ========================================================================
+    # PASSO 1: Construir o Extended Symplectic Pencil (2n+m) × (2n+m)
+    # ========================================================================
+    # Este é o método completo de van Dooren que evita inversão de R
+    
+    # Matriz H (2n+m) × (2n+m)
+    H = np.zeros((2*n + m, 2*n + m), dtype=float)
+    
+    # Bloco superior: [A | 0 | B]
+    H[:n, :n] = A                           # A
+    H[:n, n:2*n] = 0.0                      # 0
+    H[:n, 2*n:] = B                         # B
+    
+    # Bloco do meio: [-Q | I | 0]
+    H[n:2*n, :n] = -Q                       # -Q
+    H[n:2*n, n:2*n] = np.eye(n)            # I (E^H para caso padrão)
+    H[n:2*n, 2*n:] = 0.0                    # 0 (-S para caso generalizado)
+    
+    # Bloco inferior: [0 | 0 | R]
+    H[2*n:, :n] = 0.0                       # 0 (S^H para caso generalizado)
+    H[2*n:, n:2*n] = 0.0                    # 0
+    H[2*n:, 2*n:] = R                       # R
+    
+    # Matriz J (2n+m) × (2n+m)
+    J = np.zeros((2*n + m, 2*n + m), dtype=float)
+    
+    # Bloco superior: [I | 0 | B]
+    J[:n, :n] = np.eye(n)                   # I (E para caso padrão)
+    J[:n, n:2*n] = 0.0                      # 0
+    J[:n, 2*n:] = B                         # B
+    
+    # Bloco do meio: [0 | A^T | 0]
+    J[n:2*n, :n] = 0.0                      # 0
+    J[n:2*n, n:2*n] = A.T                   # A^T
+    J[n:2*n, 2*n:] = 0.0                    # 0
+    
+    # Bloco inferior: [0 | -B^T | 0]
+    J[2*n:, :n] = 0.0                       # 0
+    J[2*n:, n:2*n] = -B.T                   # -B^T
+    J[2*n:, 2*n:] = 0.0                     # 0
+    
+    # ========================================================================
+    # PASSO 2: Deflação pela coluna R (método de van Dooren)
+    # ========================================================================
+    # Deflaciona o pencil de (2n+m)×(2n+m) para (2n)×(2n)
+    # usando decomposição QR das últimas m colunas de H
+    
+    # Extrai as últimas m colunas de H para deflação
+    H_last_cols = H[:, -m:]
+    
+    # QR decomposition: H_last_cols = Q_qr @ R_qr
+    Q_qr, _ = qr(H_last_cols)
+    
+    # Projeta H e J no espaço ortogonal às últimas m colunas
+    # Pega apenas as primeiras 2n colunas de Q_qr (descarta as últimas m)
+    Q_deflate = Q_qr[:, m:]  # (2n+m) × 2n
+    
+    # Aplica deflação: H_def = Q_deflate^T @ H @ [:, :2n]
+    #                  J_def = Q_deflate^T @ J @ [:, :2n]
+    H_deflated = Q_deflate.T @ H[:, :2*n]  # (2n) × (2n)
+    J_deflated = Q_deflate.T @ J[:, :2*n]  # (2n) × (2n)
+    
+    # ========================================================================
+    # PASSO 3: Decomposição QZ Generalizada Ordenada (2n × 2n)
+    # ========================================================================
+    # ordqz com 'iuc' = inside unit circle (|λ| < 1 para DARE)
+    
+    AA, BB, alpha, beta, Q_schur, Z_schur = ordqz(
+        H_deflated, J_deflated, 
+        sort='iuc',
+        output='real'
+    )
+    
+    # ========================================================================
+    # PASSO 4: Extrair subespaço invariante estável (n primeiros autovetores)
+    # ========================================================================
+    # Z_schur = [U11  U12]  onde cada bloco é n × n
+    #           [U21  U22]
+    
+    U11 = Z_schur[:n, :n]
+    U21 = Z_schur[n:, :n]
+    
+    # ========================================================================
+    # PASSO 5: Calcular solução P = U21 @ inv(U11)
+    # ========================================================================
+    P = U21 @ np.linalg.inv(U11)
+    
+    # Simetriza para remover erros numéricos
+    P = (P + P.T) / 2
+    
+    # ========================================================================
+    # PASSO 6: Calcular ganho K
+    # ========================================================================
+    K = np.linalg.inv(R + B.T @ P @ B) @ (B.T @ P @ A)
+    
+    # ========================================================================
+    # PASSO 7: Autovalores do sistema em malha fechada
+    # ========================================================================
     A_cl = A - B @ K
     eig_cl = np.linalg.eigvals(A_cl)
     
@@ -683,22 +840,11 @@ def comparacao_tres_metodos(A, B, Q, R, P_schur, K_schur):
         print("-" * 80)
         
         _, residuo_schur = verificar_solucao_dare(A, B, Q, R, P_schur)
-        _, residuo_scipy = verificar_solucao_dare(A, B, Q, R, P_scipy)
         _, residuo_iter = verificar_solucao_dare(A, B, Q, R, P_iter)
         
         print(f"\nNorma do resíduo ||A^T*P*A - P - A^T*P*B*inv(...)*B^T*P*A + Q||:")
         print(f"  Schur:     {residuo_schur:.2e}")
-        print(f"  SciPy:     {residuo_scipy:.2e}")
         print(f"  Iterativo: {residuo_iter:.2e}")
-        
-        # Verifica qual tem menor resíduo
-        residuos = [("Schur", residuo_schur), ("SciPy", residuo_scipy), ("Iterativo", residuo_iter)]
-        melhor = min(residuos, key=lambda x: x[1])
-        
-        if melhor[1] < 1e-10:
-            print(f"\n✓ Todos os métodos têm precisão excelente (resíduo < 1e-10)")
-        else:
-            print(f"\n✓ Melhor precisão: {melhor[0]} (resíduo = {melhor[1]:.2e})")
         
         # ====================================================================
         # Resumo Final
@@ -712,7 +858,7 @@ def comparacao_tres_metodos(A, B, Q, R, P_schur, K_schur):
         print("├──────────────────────┬──────────────────┬──────────────────┬────────────────┤")
         print("│      Método          │  Tempo Médio     │  Erro em P       │  Resíduo DARE  │")
         print("├──────────────────────┼──────────────────┼──────────────────┼────────────────┤")
-        print(f"│ 1. Schur (custom)    │  {tempo_schur_medio*1000:6.3f} ms       │  {norma_diff_P_schur:.2e}     │  {residuo_schur:.2e}    │")
+        print(f"│ 1. Schur (ordqz)     │  {tempo_schur_medio*1000:6.3f} ms       │  {norma_diff_P_schur:.2e}     │  {residuo_schur:.2e}    │")
         print(f"│ 2. SciPy (LAPACK)    │  {tempo_scipy_medio*1000:6.3f} ms       │  (referência)    │  {residuo_scipy:.2e}    │")
         print(f"│ 3. Iterativo ({int(n_iter_medio):3d} it) │  {tempo_iter_medio*1000:6.3f} ms       │  {norma_diff_P_iter:.2e}     │  {residuo_iter:.2e}    │")
         print("├──────────────────────┴──────────────────┴──────────────────┴────────────────┤")
@@ -737,6 +883,265 @@ def comparacao_tres_metodos(A, B, Q, R, P_schur, K_schur):
         print("Instale com: pip install scipy")
 
 
+def comparacao_quatro_metodos(A, B, Q, R, P_schur, K_schur):
+    """
+    Compara 4 métodos para resolver a DARE:
+    1. Método de Schur (2n×2n - implementado)
+    2. Método de van Dooren ((2n+m)×(2n+m) com deflação)
+    3. SciPy solve_discrete_are
+    4. Método Iterativo (convergência de P)
+    
+    Inclui comparação de tempo de execução e precisão.
+    """
+    
+    print("\n\n" + "=" * 80)
+    print("COMPARAÇÃO DOS 4 MÉTODOS - Sistema 6x6")
+    print("=" * 80)
+    
+    try:
+        from scipy.linalg import solve_discrete_are
+        
+        print("\nMétodos a serem comparados:")
+        print("  1. Método de Schur (pencil 2n×2n - implementação customizada)")
+        print("  2. Método de van Dooren (pencil (2n+m)×(2n+m) com deflação)")
+        print("  3. SciPy solve_discrete_are (LAPACK otimizado)")
+        print("  4. Método Iterativo (convergência direta da equação de Riccati)")
+        print(f"\nSistema: A {A.shape}, B {B.shape}, Q {Q.shape}, R {R.shape}")
+        print(f"Dimensões dos pencils:")
+        print(f"  - Schur:      {2*A.shape[0]} × {2*A.shape[0]}")
+        print(f"  - van Dooren: {2*A.shape[0] + B.shape[1]} × {2*A.shape[0] + B.shape[1]} → {2*A.shape[0]} × {2*A.shape[0]} (deflado)")
+        
+        # ====================================================================
+        # BENCHMARK: Comparação de tempo de execução
+        # ====================================================================
+        print("\n" + "=" * 80)
+        print("BENCHMARK - Tempo de Execução dos 4 Métodos")
+        print("=" * 80)
+        
+        n_execucoes = 100
+        print(f"\nExecutando cada método {n_execucoes} vezes para comparação de desempenho...")
+        print("Aguarde...")
+        
+        # Benchmark do método de Schur
+        print("\n[1/4] Testando método de Schur (2n×2n)...")
+        tempo_schur_list = []
+        for i in range(n_execucoes):
+            t_inicio = time.perf_counter()
+            P_test, K_test, _ = dare_schur(A, B, Q, R)
+            t_fim = time.perf_counter()
+            tempo_schur_list.append(t_fim - t_inicio)
+        
+        tempo_schur_medio = np.mean(tempo_schur_list)
+        tempo_schur_std = np.std(tempo_schur_list)
+        tempo_schur_min = np.min(tempo_schur_list)
+        tempo_schur_max = np.max(tempo_schur_list)
+        
+        # Benchmark do método de van Dooren
+        print("[2/4] Testando método de van Dooren ((2n+m)×(2n+m) com deflação)...")
+        tempo_van_dooren_list = []
+        for i in range(n_execucoes):
+            t_inicio = time.perf_counter()
+            P_test, K_test, _ = dare_van_dooren(A, B, Q, R)
+            t_fim = time.perf_counter()
+            tempo_van_dooren_list.append(t_fim - t_inicio)
+        
+        tempo_van_dooren_medio = np.mean(tempo_van_dooren_list)
+        tempo_van_dooren_std = np.std(tempo_van_dooren_list)
+        tempo_van_dooren_min = np.min(tempo_van_dooren_list)
+        tempo_van_dooren_max = np.max(tempo_van_dooren_list)
+        
+        # Benchmark do SciPy
+        print("[3/4] Testando SciPy solve_discrete_are...")
+        tempo_scipy_list = []
+        for i in range(n_execucoes):
+            t_inicio = time.perf_counter()
+            P_test = solve_discrete_are(A, B, Q, R)
+            K_test = np.linalg.inv(R + B.T @ P_test @ B) @ (B.T @ P_test @ A)
+            t_fim = time.perf_counter()
+            tempo_scipy_list.append(t_fim - t_inicio)
+        
+        tempo_scipy_medio = np.mean(tempo_scipy_list)
+        tempo_scipy_std = np.std(tempo_scipy_list)
+        tempo_scipy_min = np.min(tempo_scipy_list)
+        tempo_scipy_max = np.max(tempo_scipy_list)
+        
+        # Benchmark do método iterativo
+        print("[4/4] Testando método iterativo...")
+        tempo_iter_list = []
+        n_iter_total = 0
+        for i in range(n_execucoes):
+            t_inicio = time.perf_counter()
+            P_test, K_test, _, n_iter = dare_iterativo(A, B, Q, R)
+            t_fim = time.perf_counter()
+            tempo_iter_list.append(t_fim - t_inicio)
+            n_iter_total += n_iter
+        
+        tempo_iter_medio = np.mean(tempo_iter_list)
+        tempo_iter_std = np.std(tempo_iter_list)
+        tempo_iter_min = np.min(tempo_iter_list)
+        tempo_iter_max = np.max(tempo_iter_list)
+        n_iter_medio = n_iter_total / n_execucoes
+        
+        # Resultados do benchmark
+        print("\n" + "=" * 80)
+        print("RESULTADOS DO BENCHMARK - COMPARAÇÃO DOS 4 MÉTODOS")
+        print("=" * 80)
+        
+        print(f"\n1. Método de Schur (2n×2n):")
+        print(f"   Tempo médio:   {tempo_schur_medio*1000:.3f} ms")
+        print(f"   Desvio padrão: {tempo_schur_std*1000:.3f} ms")
+        print(f"   Tempo mínimo:  {tempo_schur_min*1000:.3f} ms")
+        print(f"   Tempo máximo:  {tempo_schur_max*1000:.3f} ms")
+        
+        print(f"\n2. Método de van Dooren ((2n+m)×(2n+m) → 2n×2n):")
+        print(f"   Tempo médio:   {tempo_van_dooren_medio*1000:.3f} ms")
+        print(f"   Desvio padrão: {tempo_van_dooren_std*1000:.3f} ms")
+        print(f"   Tempo mínimo:  {tempo_van_dooren_min*1000:.3f} ms")
+        print(f"   Tempo máximo:  {tempo_van_dooren_max*1000:.3f} ms")
+        
+        print(f"\n3. SciPy solve_discrete_are (LAPACK):")
+        print(f"   Tempo médio:   {tempo_scipy_medio*1000:.3f} ms")
+        print(f"   Desvio padrão: {tempo_scipy_std*1000:.3f} ms")
+        print(f"   Tempo mínimo:  {tempo_scipy_min*1000:.3f} ms")
+        print(f"   Tempo máximo:  {tempo_scipy_max*1000:.3f} ms")
+        
+        print(f"\n4. Método Iterativo (convergência):")
+        print(f"   Tempo médio:   {tempo_iter_medio*1000:.3f} ms")
+        print(f"   Desvio padrão: {tempo_iter_std*1000:.3f} ms")
+        print(f"   Tempo mínimo:  {tempo_iter_min*1000:.3f} ms")
+        print(f"   Tempo máximo:  {tempo_iter_max*1000:.3f} ms")
+        print(f"   Iterações médias: {n_iter_medio:.1f}")
+        
+        # Comparação relativa
+        print("\n" + "=" * 80)
+        print("COMPARAÇÃO RELATIVA DE DESEMPENHO")
+        print("=" * 80)
+        
+        metodos = [
+            ("Schur (2n×2n)", tempo_schur_medio),
+            ("van Dooren", tempo_van_dooren_medio),
+            ("SciPy", tempo_scipy_medio),
+            ("Iterativo", tempo_iter_medio)
+        ]
+        metodos_ordenados = sorted(metodos, key=lambda x: x[1])
+        
+        print(f"\nRanking de velocidade (do mais rápido ao mais lento):")
+        for i, (nome, tempo) in enumerate(metodos_ordenados, 1):
+            razao = tempo / metodos_ordenados[0][1]
+            print(f"  {i}º - {nome:20s}: {tempo*1000:6.3f} ms  ({razao:.2f}x do mais rápido)")
+        
+        # ====================================================================
+        # Comparação de Precisão
+        # ====================================================================
+        print("\n\n" + "=" * 80)
+        print("COMPARAÇÃO DE PRECISÃO DOS 4 MÉTODOS")
+        print("=" * 80)
+        
+        print("\nCalculando soluções para comparação de precisão...")
+        P_van_dooren, K_van_dooren, _ = dare_van_dooren(A, B, Q, R)
+        P_scipy = solve_discrete_are(A, B, Q, R)
+        K_scipy = np.linalg.inv(R + B.T @ P_scipy @ B) @ (B.T @ P_scipy @ A)
+        P_iter, K_iter, _, n_iter_final = dare_iterativo(A, B, Q, R)
+        
+        print("\n" + "-" * 80)
+        print("Diferenças em relação ao SciPy (referência):")
+        print("-" * 80)
+        
+        # Diferenças em P
+        diff_P_schur = P_schur - P_scipy
+        diff_P_van_dooren = P_van_dooren - P_scipy
+        diff_P_iter = P_iter - P_scipy
+        
+        norma_diff_P_schur = np.linalg.norm(diff_P_schur, 'fro')
+        norma_diff_P_van_dooren = np.linalg.norm(diff_P_van_dooren, 'fro')
+        norma_diff_P_iter = np.linalg.norm(diff_P_iter, 'fro')
+        
+        print(f"\nDiferença em P (Norma de Frobenius):")
+        print(f"  Schur vs SciPy:      {norma_diff_P_schur:.2e}")
+        print(f"  van Dooren vs SciPy: {norma_diff_P_van_dooren:.2e}")
+        print(f"  Iterativo vs SciPy:  {norma_diff_P_iter:.2e}")
+        
+        # Diferenças em K
+        diff_K_schur = K_schur - K_scipy
+        diff_K_van_dooren = K_van_dooren - K_scipy
+        diff_K_iter = K_iter - K_scipy
+        
+        norma_diff_K_schur = np.linalg.norm(diff_K_schur, 'fro')
+        norma_diff_K_van_dooren = np.linalg.norm(diff_K_van_dooren, 'fro')
+        norma_diff_K_iter = np.linalg.norm(diff_K_iter, 'fro')
+        
+        print(f"\nDiferença em K (Norma de Frobenius):")
+        print(f"  Schur vs SciPy:      {norma_diff_K_schur:.2e}")
+        print(f"  van Dooren vs SciPy: {norma_diff_K_van_dooren:.2e}")
+        print(f"  Iterativo vs SciPy:  {norma_diff_K_iter:.2e}")
+        
+        # Verificação dos resíduos DARE
+        print("\n" + "-" * 80)
+        print("Verificação do resíduo da DARE:")
+        print("-" * 80)
+        
+        _, residuo_schur = verificar_solucao_dare(A, B, Q, R, P_schur)
+        _, residuo_van_dooren = verificar_solucao_dare(A, B, Q, R, P_van_dooren)
+        _, residuo_scipy = verificar_solucao_dare(A, B, Q, R, P_scipy)
+        _, residuo_iter = verificar_solucao_dare(A, B, Q, R, P_iter)
+        
+        print(f"\nNorma do resíduo ||A^T*P*A - P - A^T*P*B*inv(...)*B^T*P*A + Q||:")
+        print(f"  Schur:      {residuo_schur:.2e}")
+        print(f"  van Dooren: {residuo_van_dooren:.2e}")
+        print(f"  SciPy:      {residuo_scipy:.2e}")
+        print(f"  Iterativo:  {residuo_iter:.2e}")
+        
+        # ====================================================================
+        # Resumo Final
+        # ====================================================================
+        print("\n\n" + "=" * 80)
+        print("RESUMO FINAL - COMPARAÇÃO DOS 4 MÉTODOS")
+        print("=" * 80)
+        
+        print("\n┌──────────────────────────────────────────────────────────────────────────────────┐")
+        print("│                          DESEMPENHO vs PRECISÃO                                  │")
+        print("├────────────────────────┬─────────────────┬─────────────────┬───────────────────┤")
+        print("│      Método            │  Tempo Médio    │  Erro em P      │  Resíduo DARE     │")
+        print("├────────────────────────┼─────────────────┼─────────────────┼───────────────────┤")
+        print(f"│ 1. Schur (2n×2n)       │  {tempo_schur_medio*1000:6.3f} ms      │  {norma_diff_P_schur:.2e}    │  {residuo_schur:.2e}       │")
+        print(f"│ 2. van Dooren (defl)   │  {tempo_van_dooren_medio*1000:6.3f} ms      │  {norma_diff_P_van_dooren:.2e}    │  {residuo_van_dooren:.2e}       │")
+        print(f"│ 3. SciPy (LAPACK)      │  {tempo_scipy_medio*1000:6.3f} ms      │  (referência)   │  {residuo_scipy:.2e}       │")
+        print(f"│ 4. Iterativo ({int(n_iter_medio):3d} it)   │  {tempo_iter_medio*1000:6.3f} ms      │  {norma_diff_P_iter:.2e}    │  {residuo_iter:.2e}       │")
+        print("├────────────────────────┴─────────────────┴─────────────────┴───────────────────┤")
+        
+        # Análise final
+        mais_rapido = metodos_ordenados[0][0]
+        residuos = [
+            ("Schur", residuo_schur),
+            ("van Dooren", residuo_van_dooren),
+            ("SciPy", residuo_scipy),
+            ("Iterativo", residuo_iter)
+        ]
+        mais_preciso = min(residuos, key=lambda x: x[1])[0]
+        
+        print("│ Conclusões:                                                                      │")
+        print(f"│  • Mais rápido:  {mais_rapido:30s}                                    │")
+        print(f"│  • Mais preciso: {mais_preciso:30s}                                    │")
+        print("│  • van Dooren evita inversão explícita de R (mais robusto numericamente)        │")
+        print(f"│  • van Dooren usa pencil maior ({2*A.shape[0]+B.shape[1]}×{2*A.shape[0]+B.shape[1]}) mas deflaciona para ({2*A.shape[0]}×{2*A.shape[0]})                  │")
+        print("│  • Schur (2n×2n) é mais compacto mas requer inv(R)                              │")
+        
+        # Comparação entre Schur e van Dooren
+        razao_schur_van_dooren = tempo_schur_medio / tempo_van_dooren_medio
+        if razao_schur_van_dooren < 1:
+            diff_percent = (1 - razao_schur_van_dooren) * 100
+            print(f"│  • Schur é {diff_percent:.1f}% mais rápido que van Dooren                                    │")
+        else:
+            diff_percent = (razao_schur_van_dooren - 1) * 100
+            print(f"│  • van Dooren é {diff_percent:.1f}% mais rápido que Schur                                 │")
+        
+        print("└──────────────────────────────────────────────────────────────────────────────────┘")
+        
+    except ImportError:
+        print("\n⚠ SciPy não disponível para comparação")
+        print("Instale com: pip install scipy")
+
+
 if __name__ == "__main__":
     """
     Exemplo numérico do algoritmo de Schur para DARE com sistema 6x6
@@ -754,8 +1159,8 @@ if __name__ == "__main__":
     # Executa exemplo com sistema 6x6
     A, B, Q, R, P, K, eig_cl, x_hist, u_hist = exemplo_sistema_6x6()
     
-    # Comparação dos 3 métodos usando o mesmo sistema 6x6
-    comparacao_tres_metodos(A, B, Q, R, P, K)
+    # Comparação dos 4 métodos usando o mesmo sistema 6x6
+    comparacao_quatro_metodos(A, B, Q, R, P, K)
     
     print("\n" + "█" * 80)
     print("█" + " " * 25 + "EXEMPLO CONCLUÍDO" + " " * 35 + "█")
