@@ -436,51 +436,114 @@ def exemplo_sistema_6x6():
     """
     Exemplo 4: Sistema de alta dimensão (6x6) com múltiplas entradas (3)
     
-    Representa um sistema mais complexo como um drone/VANT com 6 estados:
-    - Posição x, y, z
-    - Velocidade vx, vy, vz
-    
-    E 3 entradas de controle:
-    - Força em x, y, z
+    Sistema do drone/VANT - MESMAS MATRIZES DO CÓDIGO C++
+    Estados: [roll, pitch, yaw, p, q, r]^T
+    Entradas: [τx, τy, τz]^T (torques)
     """
     
     print("\n\n" + "=" * 80)
-    print("EXEMPLO 4: Sistema 6x6 com 3 Entradas de Controle")
+    print("EXEMPLO 4: Sistema 6x6 com 3 Entradas de Controle (Drone)")
     print("=" * 80)
     
-    Ts = 0.1  # período de amostragem
+    # Parâmetros físicos do sistema (do código C++)
+    Ixx = 1e-5  # kg·m²
+    Iyy = 1e-5  # kg·m²
+    Izz = 1e-5  # kg·m²
+    Ir = 1e-5   # kg·m²
+    omega_r = 0
     
-    # Sistema discreto 6x6 - modelo simplificado de dinâmica de posição
-    # Estados: [x, y, z, vx, vy, vz]^T
-    # x[k+1] = A*x[k] + B*u[k]
+    # Valores de roll, pitch, yaw, p, q, r (do código C++)
+    roll = 0.0
+    pitch = 0.0
+    yaw = 0.0
+    p = 0.0
+    q = 0.0
+    r = 0.0
     
-    # Matriz A: dinâmica do sistema
-    # Posições são integração das velocidades
-    # Velocidades têm pequeno amortecimento (0.95)
-    A = np.array([
-        [1.0, 0.0, 0.0, Ts,  0.0, 0.0],   # x[k+1] = x[k] + Ts*vx[k]
-        [0.0, 1.0, 0.0, 0.0, Ts,  0.0],   # y[k+1] = y[k] + Ts*vy[k]
-        [0.0, 0.0, 1.0, 0.0, 0.0, Ts ],   # z[k+1] = z[k] + Ts*vz[k]
-        [0.0, 0.0, 0.0, 0.95, 0.0, 0.0],  # vx[k+1] = 0.95*vx[k] + u1
-        [0.0, 0.0, 0.0, 0.0, 0.95, 0.0],  # vy[k+1] = 0.95*vy[k] + u2
-        [0.0, 0.0, 0.0, 0.0, 0.0, 0.95]   # vz[k+1] = 0.95*vz[k] + u3
+    # Tempo de amostragem (do código C++)
+    dt = 0.01  # samplingTime
+    
+    print(f"\nParâmetros do sistema:")
+    print(f"  Ixx = {Ixx} kg·m²")
+    print(f"  Iyy = {Iyy} kg·m²")
+    print(f"  Izz = {Izz} kg·m²")
+    print(f"  dt = {dt} s")
+    
+    # ========================================================================
+    # Construção da Matriz A contínua (mesmo código C++)
+    # ========================================================================
+    A_continuous = np.zeros((6, 6))
+    
+    # Calcula valores trigonométricos
+    sin_roll = np.sin(roll)
+    cos_roll = np.cos(roll)
+    cos_pitch = np.cos(pitch)
+    tan_pitch = np.tan(pitch)
+    inv_cos_pitch = 1.0 / cos_pitch
+    
+    # Preenche a matriz A conforme o sistema do drone (linha por linha como no C++)
+    # Linha 0
+    A_continuous[0, 3] = 1
+    A_continuous[0, 4] = sin_roll * tan_pitch
+    A_continuous[0, 5] = cos_roll * tan_pitch
+    
+    # Linha 1
+    A_continuous[1, 4] = cos_roll
+    A_continuous[1, 5] = -sin_roll
+    
+    # Linha 2
+    A_continuous[2, 4] = sin_roll * inv_cos_pitch
+    A_continuous[2, 5] = cos_roll * inv_cos_pitch
+    
+    # Linha 3
+    A_continuous[3, 4] = ((Iyy - Izz) / (2 * Ixx)) * r - Ir * omega_r / Ixx
+    A_continuous[3, 5] = ((Iyy - Izz) / (2 * Ixx)) * q
+    
+    # Linha 4
+    A_continuous[4, 3] = ((Izz - Ixx) / (2 * Iyy)) * r - Ir * omega_r / Iyy
+    A_continuous[4, 5] = ((Izz - Ixx) / (2 * Iyy)) * p
+    
+    # Linha 5
+    A_continuous[5, 3] = ((Ixx - Iyy) / (2 * Izz)) * q
+    A_continuous[5, 4] = ((Ixx - Iyy) / (2 * Izz)) * p
+    
+    # ========================================================================
+    # Construção da Matriz B contínua (mesmo código C++)
+    # ========================================================================
+    B_continuous = np.array([
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+        [1/Ixx, 0, 0],
+        [0, 1/Iyy, 0],
+        [0, 0, 1/Izz]
     ])
     
-    # Matriz B: 6x3 - cada entrada controla uma componente de velocidade
-    B = np.array([
-        [0.0,  0.0,  0.0],   # posição x não afetada diretamente
-        [0.0,  0.0,  0.0],   # posição y não afetada diretamente
-        [0.0,  0.0,  0.0],   # posição z não afetada diretamente
-        [0.001,  0.0,  0.0],   # u1 afeta vx
-        [0.0,  0.001,  0.0],   # u2 afeta vy
-        [0.0,  0.0,  0.001]    # u3 afeta vz
-    ])
+    # ========================================================================
+    # Discretização usando série de Taylor (mesmo método do C++)
+    # ========================================================================
+    dt2_over_2 = dt * dt * 0.5
+    dt3_over_6 = dt * dt * dt / 6.0
     
-    print("\nMatriz A (6x6):")
+    # Calcula A^2
+    A2 = A_continuous @ A_continuous
+    
+    # Calcula A^3
+    A3 = A2 @ A_continuous
+    
+    # Discretiza A: Ad = I + A*dt + (A^2*dt^2)/2 + (A^3*dt^3)/6
+    A = np.eye(6) + A_continuous * dt + A2 * dt2_over_2 + A3 * dt3_over_6
+    
+    # Discretiza B: Bd = B*dt + (A*B*dt^2)/2 + (A^2*B*dt^3)/6
+    AB = A_continuous @ B_continuous
+    A2B = A2 @ B_continuous
+    B = B_continuous * dt + AB * dt2_over_2 + A2B * dt3_over_6
+    
+    print("\nMatriz A discretizada (6x6):")
     print(A)
     print(f"\nDimensões de A: {A.shape}")
     
-    print("\nMatriz B (6x3):")
+    print("\nMatriz B discretizada (6x3):")
     print(B)
     print(f"\nDimensões de B: {B.shape}")
     
@@ -490,13 +553,23 @@ def exemplo_sistema_6x6():
     print(eig_A)
     print("Magnitudes:", np.abs(eig_A))
     
-    # Matrizes de custo
-    # Q: penaliza posições e velocidades
-    Q = np.diag([1000.0, 1000.0, 1000.0,  # pesos para x, y, z
-                 1.0,  1.0,  1.0])   # pesos para vx, vy, vz
+    # ========================================================================
+    # Matrizes de custo Q e R (mesmo código C++)
+    # ========================================================================
+    Q = np.array([
+        [100, 0, 0, 0, 0, 0],
+        [0, 100, 0, 0, 0, 0],
+        [0, 0, 100, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 0, 1]
+    ])
     
-    # R: penaliza o uso de controle (3x3)
-    R = np.diag([1.0, 1.0, 1.0])
+    R = np.array([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+    ])
     
     print("\nMatriz Q (6x6) - peso dos estados:")
     print(Q)
@@ -597,50 +670,50 @@ def exemplo_sistema_6x6():
     
     # Plota resultados (6 estados + 3 controles)
     try:
-        plotar_resultados_6x6(x_hist, u_hist, Ts)
+        plotar_resultados_6x6(x_hist, u_hist, dt)
     except:
         print("\n(Gráficos não exibidos - matplotlib pode não estar configurado)")
     
     return A, B, Q, R, P, K, eig_cl, x_hist, u_hist
 
 
-def plotar_resultados_6x6(x_hist, u_hist, Ts):
+def plotar_resultados_6x6(x_hist, u_hist, dt):
     """
     Plota os resultados da simulação para sistema 6x6 com 3 entradas.
     """
     
     n_steps = x_hist.shape[1]
-    t = np.arange(n_steps) * Ts
+    t = np.arange(n_steps) * dt
     
     fig, axes = plt.subplots(3, 1, figsize=(12, 10))
     
-    # Plot das posições (x, y, z)
-    axes[0].plot(t, x_hist[0, :], 'b-', label='x', linewidth=2)
-    axes[0].plot(t, x_hist[1, :], 'r-', label='y', linewidth=2)
-    axes[0].plot(t, x_hist[2, :], 'g-', label='z', linewidth=2)
+    # Plot dos ângulos (roll, pitch, yaw)
+    axes[0].plot(t, x_hist[0, :], 'b-', label='roll', linewidth=2)
+    axes[0].plot(t, x_hist[1, :], 'r-', label='pitch', linewidth=2)
+    axes[0].plot(t, x_hist[2, :], 'g-', label='yaw', linewidth=2)
     axes[0].set_xlabel('Tempo (s)')
-    axes[0].set_ylabel('Posição (m)')
-    axes[0].set_title('Posições do Sistema - Controle LQR via DARE')
+    axes[0].set_ylabel('Ângulo (rad)')
+    axes[0].set_title('Ângulos do Drone - Controle LQR via DARE')
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
     
-    # Plot das velocidades (vx, vy, vz)
-    axes[1].plot(t, x_hist[3, :], 'b--', label='vx', linewidth=2)
-    axes[1].plot(t, x_hist[4, :], 'r--', label='vy', linewidth=2)
-    axes[1].plot(t, x_hist[5, :], 'g--', label='vz', linewidth=2)
+    # Plot das velocidades angulares (p, q, r)
+    axes[1].plot(t, x_hist[3, :], 'b--', label='p', linewidth=2)
+    axes[1].plot(t, x_hist[4, :], 'r--', label='q', linewidth=2)
+    axes[1].plot(t, x_hist[5, :], 'g--', label='r', linewidth=2)
     axes[1].set_xlabel('Tempo (s)')
-    axes[1].set_ylabel('Velocidade (m/s)')
-    axes[1].set_title('Velocidades do Sistema')
+    axes[1].set_ylabel('Velocidade Angular (rad/s)')
+    axes[1].set_title('Velocidades Angulares do Drone')
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
     
     # Plot dos controles (u1, u2, u3)
-    axes[2].plot(t, u_hist[0, :], 'b-', label='u1 (Fx)', linewidth=2)
-    axes[2].plot(t, u_hist[1, :], 'r-', label='u2 (Fy)', linewidth=2)
-    axes[2].plot(t, u_hist[2, :], 'g-', label='u3 (Fz)', linewidth=2)
+    axes[2].plot(t, u_hist[0, :], 'b-', label='u1 (τx)', linewidth=2)
+    axes[2].plot(t, u_hist[1, :], 'r-', label='u2 (τy)', linewidth=2)
+    axes[2].plot(t, u_hist[2, :], 'g-', label='u3 (τz)', linewidth=2)
     axes[2].set_xlabel('Tempo (s)')
-    axes[2].set_ylabel('Controle (N)')
-    axes[2].set_title('Sinais de Controle')
+    axes[2].set_ylabel('Torque (N·m)')
+    axes[2].set_title('Sinais de Controle (Torques)')
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
     
