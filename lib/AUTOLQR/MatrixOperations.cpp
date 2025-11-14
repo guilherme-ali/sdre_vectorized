@@ -510,3 +510,372 @@ IRAM_ATTR void MatrixOperations::matrixVectorMultiply(const float* matrix, const
         result[i] = sum;
     }
 }
+
+// ============================================================================
+// FUNÇÕES AUXILIARES PARA DECOMPOSIÇÃO QZ/SCHUR
+// ============================================================================
+
+// Rotação de Givens para zerar elemento (i+1, i)
+IRAM_ATTR void MatrixOperations::givensRotation(float* matrix, int n, int i, int j, float c, float s)
+{
+    if (!matrix || i >= n || j >= n)
+        return;
+    
+    // Aplica rotação nas linhas i e j
+    for (int k = 0; k < n; k++) {
+        float temp_i = matrix[i * n + k];
+        float temp_j = matrix[j * n + k];
+        matrix[i * n + k] = c * temp_i - s * temp_j;
+        matrix[j * n + k] = s * temp_i + c * temp_j;
+    }
+}
+
+// Redução para forma de Hessenberg (quase triangular superior)
+IRAM_ATTR bool MatrixOperations::hessenbergReduction(float* matrix, float* Q, int n)
+{
+    if (!matrix || !Q || n <= 2)
+        return false;
+    
+    // Inicializar Q como identidade
+    matrixIdentity(Q, n);
+    
+    // Para cada coluna (exceto as duas últimas)
+    for (int k = 0; k < n - 2; k++) {
+        // Encontrar elemento máximo abaixo da diagonal
+        float max_val = fabsf(matrix[(k + 1) * n + k]);
+        int max_idx = k + 1;
+        
+        for (int i = k + 2; i < n; i++) {
+            float val = fabsf(matrix[i * n + k]);
+            if (val > max_val) {
+                max_val = val;
+                max_idx = i;
+            }
+        }
+        
+        // Se elemento já é zero, continuar
+        if (max_val < EPSILON)
+            continue;
+        
+        // Calcular rotação de Givens
+        float a = matrix[(k + 1) * n + k];
+        float b = matrix[max_idx * n + k];
+        float r = sqrtf(a * a + b * b);
+        float c = a / r;
+        float s = -b / r;
+        
+        // Aplicar rotação em matrix e Q
+        givensRotation(matrix, n, k + 1, max_idx, c, s);
+        givensRotation(Q, n, k + 1, max_idx, c, s);
+        
+        // Aplicar rotação transposta nas colunas
+        for (int i = 0; i < n; i++) {
+            float temp_k1 = matrix[i * n + (k + 1)];
+            float temp_max = matrix[i * n + max_idx];
+            matrix[i * n + (k + 1)] = c * temp_k1 - s * temp_max;
+            matrix[i * n + max_idx] = s * temp_k1 + c * temp_max;
+        }
+    }
+    
+    return true;
+}
+
+// Decomposição QR usando rotações de Givens
+IRAM_ATTR void MatrixOperations::qrDecomposition(float* matrix, float* Q, float* R, int n)
+{
+    if (!matrix || !Q || !R)
+        return;
+    
+    // Copiar matrix para R
+    matrixCopy(matrix, R, n * n);
+    
+    // Inicializar Q como identidade
+    matrixIdentity(Q, n);
+    
+    // Aplicar rotações de Givens para triangularizar R
+    for (int j = 0; j < n - 1; j++) {
+        for (int i = n - 1; i > j; i--) {
+            float a = R[(i - 1) * n + j];
+            float b = R[i * n + j];
+            
+            if (fabsf(b) < EPSILON)
+                continue;
+            
+            float r = sqrtf(a * a + b * b);
+            float c = a / r;
+            float s = -b / r;
+            
+            // Aplicar rotação em R
+            for (int k = j; k < n; k++) {
+                float temp_im1 = R[(i - 1) * n + k];
+                float temp_i = R[i * n + k];
+                R[(i - 1) * n + k] = c * temp_im1 - s * temp_i;
+                R[i * n + k] = s * temp_im1 + c * temp_i;
+            }
+            
+            // Aplicar rotação transposta em Q
+            for (int k = 0; k < n; k++) {
+                float temp_im1 = Q[k * n + (i - 1)];
+                float temp_i = Q[k * n + i];
+                Q[k * n + (i - 1)] = c * temp_im1 - s * temp_i;
+                Q[k * n + i] = s * temp_im1 + c * temp_i;
+            }
+        }
+    }
+}
+
+// Decomposição de Schur usando algoritmo QR iterativo
+IRAM_ATTR bool MatrixOperations::schurDecomposition(float* matrix, float* Q, int n, int max_iterations)
+{
+    if (!matrix || !Q || n <= 0)
+        return false;
+    
+    // Inicializar Q como identidade
+    matrixIdentity(Q, n);
+    
+    // Reduzir para forma de Hessenberg primeiro (otimização)
+    float* Q_hess = new float[n * n];
+    if (!hessenbergReduction(matrix, Q_hess, n)) {
+        delete[] Q_hess;
+        return false;
+    }
+    
+    // Atualizar Q
+    float* temp_Q = new float[n * n];
+    matrixMultiply(Q, Q_hess, temp_Q, n, n, n);
+    matrixCopy(temp_Q, Q, n * n);
+    
+    // Alocar temporários para QR
+    float* Q_iter = new float[n * n];
+    float* R_iter = new float[n * n];
+    
+    // Iteração QR
+    for (int iter = 0; iter < max_iterations; iter++) {
+        // Verificar convergência (elemento sub-diagonal pequeno)
+        bool converged = true;
+        for (int i = 0; i < n - 1; i++) {
+            if (fabsf(matrix[(i + 1) * n + i]) > EPSILON) {
+                converged = false;
+                break;
+            }
+        }
+        
+        if (converged)
+            break;
+        
+        // QR decomposition: matrix = Q_iter * R_iter
+        qrDecomposition(matrix, Q_iter, R_iter, n);
+        
+        // Atualizar matrix = R_iter * Q_iter
+        matrixMultiply(R_iter, Q_iter, matrix, n, n, n);
+        
+        // Atualizar Q acumulado
+        matrixMultiply(Q, Q_iter, temp_Q, n, n, n);
+        matrixCopy(temp_Q, Q, n * n);
+    }
+    
+    // Limpar memória
+    delete[] Q_hess;
+    delete[] temp_Q;
+    delete[] Q_iter;
+    delete[] R_iter;
+    
+    return true;
+}
+
+// Calcular autovalores de matriz usando QR
+IRAM_ATTR bool MatrixOperations::computeEigenvalues(const float* matrix, float* eigenvalues_real,
+                                                   float* eigenvalues_imag, int n, int max_iterations)
+{
+    if (!matrix || !eigenvalues_real || !eigenvalues_imag || n <= 0)
+        return false;
+    
+    // Copiar matriz (será modificada)
+    float* A = new float[n * n];
+    float* Q = new float[n * n];
+    matrixCopy(matrix, A, n * n);
+    
+    // Decomposição de Schur
+    if (!schurDecomposition(A, Q, n, max_iterations)) {
+        delete[] A;
+        delete[] Q;
+        return false;
+    }
+    
+    // Extrair autovalores da matriz triangular superior (Schur form)
+    for (int i = 0; i < n; i++) {
+        eigenvalues_real[i] = A[i * n + i];
+        eigenvalues_imag[i] = 0.0f;
+        
+        // Detectar pares complexos conjugados (blocos 2x2)
+        if (i < n - 1 && fabsf(A[(i + 1) * n + i]) > EPSILON) {
+            // Bloco 2x2: calcular autovalores complexos
+            float a = A[i * n + i];
+            float b = A[i * n + (i + 1)];
+            float c = A[(i + 1) * n + i];
+            float d = A[(i + 1) * n + (i + 1)];
+            
+            float trace = a + d;
+            float det = a * d - b * c;
+            float discriminant = trace * trace - 4.0f * det;
+            
+            if (discriminant < 0) {
+                // Autovalores complexos conjugados
+                eigenvalues_real[i] = eigenvalues_real[i + 1] = trace * 0.5f;
+                eigenvalues_imag[i] = sqrtf(-discriminant) * 0.5f;
+                eigenvalues_imag[i + 1] = -eigenvalues_imag[i];
+                i++; // Pular próximo (par conjugado)
+            }
+        }
+    }
+    
+    delete[] A;
+    delete[] Q;
+    return true;
+}
+
+// Resolver problema generalizado de autovalores para DARE
+// Usa método simplificado específico para matrizes DARE
+IRAM_ATTR bool MatrixOperations::solveGeneralizedEigenproblemDARE(const float* H, const float* J,
+                                                                  float* stable_eigenvectors, int n)
+{
+    if (!H || !J || !stable_eigenvectors || n <= 0)
+        return false;
+    
+    const int n2 = 2 * n;
+    
+    // Para DARE, podemos simplificar: resolver J^{-1} * H
+    // (válido porque J é inversível para problemas bem-postos)
+    
+    // Alocar memória
+    float* J_inv = new float[n2 * n2];
+    float* J_inv_H = new float[n2 * n2];
+    float* eigenvalues_real = new float[n2];
+    float* eigenvalues_imag = new float[n2];
+    float* eigenvectors = new float[n2 * n2];
+    
+    // Inverter J (usando Gauss-Jordan otimizado)
+    matrixCopy(J, J_inv, n2 * n2);
+    
+    // Para matrizes grandes, usar método iterativo
+    // Por simplicidade, vamos usar abordagem direta para n pequeno (4x4 -> 8x8)
+    if (n2 == 4 || n2 == 6 || n2 == 8) {
+        // Gauss-Jordan para inversão
+        float* augmented = new float[n2 * 2 * n2];
+        matrixClear(augmented, n2 * 2 * n2);
+        
+        // [J | I]
+        for (int i = 0; i < n2; i++) {
+            for (int j = 0; j < n2; j++) {
+                augmented[i * 2 * n2 + j] = J[i * n2 + j];
+            }
+            augmented[i * 2 * n2 + (i + n2)] = 1.0f;
+        }
+        
+        // Eliminação de Gauss-Jordan
+        for (int i = 0; i < n2; i++) {
+            // Pivotamento parcial
+            float max_val = fabsf(augmented[i * 2 * n2 + i]);
+            int max_row = i;
+            for (int k = i + 1; k < n2; k++) {
+                float val = fabsf(augmented[k * 2 * n2 + i]);
+                if (val > max_val) {
+                    max_val = val;
+                    max_row = k;
+                }
+            }
+            
+            if (max_val < EPSILON) {
+                delete[] J_inv; delete[] J_inv_H; delete[] eigenvalues_real;
+                delete[] eigenvalues_imag; delete[] eigenvectors; delete[] augmented;
+                return false;
+            }
+            
+            // Trocar linhas
+            if (max_row != i) {
+                for (int j = 0; j < 2 * n2; j++) {
+                    float temp = augmented[i * 2 * n2 + j];
+                    augmented[i * 2 * n2 + j] = augmented[max_row * 2 * n2 + j];
+                    augmented[max_row * 2 * n2 + j] = temp;
+                }
+            }
+            
+            // Normalizar linha
+            float pivot = augmented[i * 2 * n2 + i];
+            for (int j = 0; j < 2 * n2; j++) {
+                augmented[i * 2 * n2 + j] /= pivot;
+            }
+            
+            // Eliminar coluna em outras linhas
+            for (int k = 0; k < n2; k++) {
+                if (k != i) {
+                    float factor = augmented[k * 2 * n2 + i];
+                    for (int j = 0; j < 2 * n2; j++) {
+                        augmented[k * 2 * n2 + j] -= factor * augmented[i * 2 * n2 + j];
+                    }
+                }
+            }
+        }
+        
+        // Extrair J_inv
+        for (int i = 0; i < n2; i++) {
+            for (int j = 0; j < n2; j++) {
+                J_inv[i * n2 + j] = augmented[i * 2 * n2 + (j + n2)];
+            }
+        }
+        
+        delete[] augmented;
+    } else {
+        delete[] J_inv; delete[] J_inv_H; delete[] eigenvalues_real;
+        delete[] eigenvalues_imag; delete[] eigenvectors;
+        return false;
+    }
+    
+    // Calcular J^{-1} * H
+    matrixMultiply(J_inv, H, J_inv_H, n2, n2, n2);
+    
+    // Calcular autovalores e autovetores
+    if (!computeEigenvalues(J_inv_H, eigenvalues_real, eigenvalues_imag, n2)) {
+        delete[] J_inv; delete[] J_inv_H; delete[] eigenvalues_real;
+        delete[] eigenvalues_imag; delete[] eigenvectors;
+        return false;
+    }
+    
+    // Identificar autovalores estáveis (|λ| < 1)
+    int stable_count = 0;
+    int stable_indices[n2];
+    
+    for (int i = 0; i < n2; i++) {
+        float magnitude = sqrtf(eigenvalues_real[i] * eigenvalues_real[i] +
+                               eigenvalues_imag[i] * eigenvalues_imag[i]);
+        if (magnitude < 1.0f) {
+            stable_indices[stable_count++] = i;
+        }
+    }
+    
+    if (stable_count != n) {
+        Serial.print(F("AVISO: Encontrados "));
+        Serial.print(stable_count);
+        Serial.print(F(" autovalores estáveis, esperados "));
+        Serial.println(n);
+        
+        delete[] J_inv; delete[] J_inv_H; delete[] eigenvalues_real;
+        delete[] eigenvalues_imag; delete[] eigenvectors;
+        return false;
+    }
+    
+    // TODO: Calcular autovetores correspondentes
+    // Por simplicidade, usar power iteration para cada autovalor estável
+    // (implementação completa requer mais trabalho)
+    
+    // Por enquanto, retornar erro indicando que precisa de implementação completa
+    Serial.println(F("AVISO: Cálculo de autovetores ainda não implementado"));
+    
+    delete[] J_inv;
+    delete[] J_inv_H;
+    delete[] eigenvalues_real;
+    delete[] eigenvalues_imag;
+    delete[] eigenvectors;
+    
+    return false; // Por enquanto, retornar false até implementar autovetores
+}

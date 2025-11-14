@@ -140,11 +140,50 @@ public:
     static void matrixVectorMultiply(const float* matrix, const float* vector, 
                                     float* result, int rows, int cols);
 
+    /**
+     * @brief Compute eigenvalues using QR algorithm for DARE
+     * @param matrix Input matrix (n x n)
+     * @param eigenvalues_real Real parts of eigenvalues (n elements)
+     * @param eigenvalues_imag Imaginary parts of eigenvalues (n elements)
+     * @param n Matrix dimension
+     * @param max_iterations Maximum QR iterations
+     * @return true if successful
+     */
+    static bool computeEigenvalues(const float* matrix, float* eigenvalues_real, 
+                                  float* eigenvalues_imag, int n, int max_iterations = 100);
+
+    /**
+     * @brief Simplified QZ decomposition for DARE problem
+     * Computes stable eigenspace for H and J matrices in DARE
+     * @param H First matrix (2n x 2n)
+     * @param J Second matrix (2n x 2n)
+     * @param stable_eigenvectors Output stable eigenvectors (2n x n)
+     * @param n Half dimension (state size)
+     * @return true if successful
+     */
+    static bool solveGeneralizedEigenproblemDARE(const float* H, const float* J,
+                                                  float* stable_eigenvectors, int n);
+
+    /**
+     * @brief Fast Schur decomposition using QR algorithm
+     * @param matrix Input matrix (n x n) - will be modified to upper triangular form
+     * @param Q Orthogonal matrix (n x n)
+     * @param n Matrix dimension
+     * @param max_iterations Maximum iterations
+     * @return true if successful
+     */
+    static bool schurDecomposition(float* matrix, float* Q, int n, int max_iterations = 200);
+
 private:
     // Constantes para otimização
     static const int CACHE_LINE_SIZE = 32;
     static const int BLOCK_SIZE = 4;
     static constexpr float EPSILON = 1e-6f;
+    
+    // Funções auxiliares para decomposição QZ
+    static void qrDecomposition(float* matrix, float* Q, float* R, int n);
+    static void givensRotation(float* matrix, int n, int i, int j, float c, float s);
+    static bool hessenbergReduction(float* matrix, float* Q, int n);
 };
 
 #endif
