@@ -76,7 +76,7 @@ void AutoLQR::setGains(const float* inputK)
 bool AutoLQR::computeGains()
 {
     // Usa método de Schur ao invés do método iterativo
-    bool K_flag = computeGainMatrixSchur();
+    bool K_flag = computeGainMatrixVanDooren();
     if (!K_flag)
         return false;
     
@@ -929,6 +929,409 @@ bool AutoLQR::computeGainMatrixSchur()
         
         Serial.print(F("  Outras operações:  "));
         Serial.print(((t_total - manual_ops - t_qz_decomp) / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        
+        Serial.println(F("====================================================================\n"));
+    }
+    
+    return true;
+}
+
+bool AutoLQR::computeGainMatrixVanDooren()
+{
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    // Verifica controlabilidade
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    // Controle de frequência de print (1Hz)
+    static unsigned long last_print_time = 0;
+    unsigned long current_time = millis();
+    bool should_print = (current_time - last_print_time >= 1000);
+
+    // ========================================================================
+    // Medição de tempo - início
+    // ========================================================================
+    unsigned long t_start = micros();
+    
+    const int n = stateSize;
+    const int m = controlSize;
+    const int pencil_size = 2*n + m;  // Tamanho do pencil de van Dooren
+
+    // ========================================================================
+    // PASSO 1: Alocar memória para matrizes intermediárias
+    // ========================================================================
+    unsigned long t_alloc_start = micros();
+    
+    float* AT = new float[stateSize * stateSize];
+    float* BT = new float[controlSize * stateSize];
+    
+    unsigned long t_alloc_end = micros();
+
+    // ========================================================================
+    // PASSO 2: Calcular A^T e B^T
+    // ========================================================================
+    unsigned long t_transpose_start = micros();
+    
+    transposeMatrix(A, AT, stateSize, stateSize);
+    transposeMatrix(B, BT, stateSize, controlSize);
+    
+    unsigned long t_transpose = micros() - t_transpose_start;
+
+    // ========================================================================
+    // PASSO 3: Construir as matrizes H e J do pencil de van Dooren (3n x 3n)
+    // Usando a formulação: H - lambda * J
+    // 
+    // H = [ A    0    B  ]        J = [ I    0    0  ]
+    //     [ -Q   I   -S  ]            [ 0   A^H   0  ]
+    //     [ S^H  0    R  ]            [ 0  -B^H   0  ]
+    //
+    // Para o caso padrão: S = 0 (não há termo cruzado)
+    // ========================================================================
+    unsigned long t_build_pencil_start = micros();
+    
+    Eigen::MatrixXf H = Eigen::MatrixXf::Zero(pencil_size, pencil_size);
+    Eigen::MatrixXf J = Eigen::MatrixXf::Zero(pencil_size, pencil_size);
+
+    // Construir H
+    // Bloco (0,0): A
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            H(i, j) = A[i * n + j];
+        }
+    }
+    
+    // Bloco (0,2): B
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < m; j++) {
+            H(i, 2*n + j) = B[i * m + j];
+        }
+    }
+    
+    // Bloco (1,0): -Q
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            H(n + i, j) = -Q[i * n + j];
+        }
+    }
+    
+    // Bloco (1,1): I (identidade)
+    for (int i = 0; i < n; i++) {
+        H(n + i, n + i) = 1.0f;
+    }
+    
+    // Bloco (2,2): R
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < m; j++) {
+            H(2*n + i, 2*n + j) = R[i * m + j];
+        }
+    }
+    
+    // Construir J
+    // Bloco (0,0): I (identidade)
+    for (int i = 0; i < n; i++) {
+        J(i, i) = 1.0f;
+    }
+    
+    // Bloco (1,1): A^T
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            J(n + i, n + j) = AT[i * n + j];
+        }
+    }
+    
+    // Bloco (2,1): -B^T
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < n; j++) {
+            J(2*n + i, n + j) = -BT[i * n + j];
+        }
+    }
+    
+    unsigned long t_build_pencil = micros() - t_build_pencil_start;
+
+    // ========================================================================
+    // PASSO 4: Decomposição QZ Generalizada
+    // ========================================================================
+    unsigned long t_qz_start = micros();
+    
+    Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges;
+    ges.compute(H, J, true);  // true = computa autovetores
+    
+    if (ges.info() != Eigen::Success) {
+        Serial.println(F("Erro na decomposição QZ generalizada"));
+        delete[] AT;
+        delete[] BT;
+        return false;
+    }
+    
+    Eigen::VectorXcf alpha = ges.alphas();
+    Eigen::VectorXcf beta = ges.betas();
+    
+    unsigned long t_qz_decomp = micros() - t_qz_start;
+
+    // ========================================================================
+    // PASSO 5: Selecionar autovalores estáveis (|lambda| < 1)
+    // Precisamos de exatamente n autovalores estáveis
+    // ========================================================================
+    unsigned long t_sort_start = micros();
+    
+    std::vector<int> stable_indices;
+    stable_indices.reserve(n);
+    
+    for (int i = 0; i < pencil_size; i++) {
+        if (std::abs(beta(i)) > 1e-10f) {
+            std::complex<float> eigenvalue = alpha(i) / beta(i);
+            float magnitude = std::abs(eigenvalue);
+            
+            if (magnitude < 1.0f) {
+                stable_indices.push_back(i);
+            }
+        }
+    }
+    
+    if (stable_indices.size() != static_cast<size_t>(n)) {
+        Serial.print(F("Erro: encontrados "));
+        Serial.print(stable_indices.size());
+        Serial.print(F(" autovalores estáveis, esperados "));
+        Serial.println(n);
+        delete[] AT;
+        delete[] BT;
+        return false;
+    }
+    
+    unsigned long t_sort_eig = micros() - t_sort_start;
+
+    // ========================================================================
+    // PASSO 6: Extrair subespaço invariante estável
+    // ========================================================================
+    unsigned long t_extract_start = micros();
+    
+    Eigen::MatrixXcf Z = ges.eigenvectors();
+    
+    // Extrair as partições U1, U2, U3 da matriz de autovetores
+    // U = [U1]  onde U1 são as primeiras n linhas
+    //     [U2]       U2 são as próximas n linhas  
+    //     [U3]       U3 são as últimas m linhas
+    
+    Eigen::MatrixXcf U1(n, n);
+    Eigen::MatrixXcf U2(n, n);
+    
+    for (int j = 0; j < n; j++) {
+        int idx = stable_indices[j];
+        for (int i = 0; i < n; i++) {
+            U1(i, j) = Z(i, idx);
+            U2(i, j) = Z(n + i, idx);
+        }
+    }
+    
+    unsigned long t_extract_subspace = micros() - t_extract_start;
+
+    // ========================================================================
+    // PASSO 7: Calcular P = U2 * inv(U1)
+    // Esta é a solução da DARE
+    // ========================================================================
+    unsigned long t_calc_P_start = micros();
+    
+    // Verificar condicionamento de U1
+    Eigen::JacobiSVD<Eigen::MatrixXcf> svd(U1);
+    float cond = svd.singularValues()(0) / svd.singularValues()(svd.singularValues().size()-1);
+    
+    if (cond > 1e6) {
+        Serial.print(F("AVISO: U1 mal condicionada, cond = "));
+        Serial.println(cond);
+    }
+    
+    Eigen::MatrixXcf P_complex = U2 * U1.inverse();
+    
+    // Extrair parte real e verificar se a parte imaginária é desprezível
+    float max_imag = 0.0f;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            float imag_part = std::abs(P_complex(i, j).imag());
+            if (imag_part > max_imag) max_imag = imag_part;
+            P[i * n + j] = P_complex(i, j).real();
+        }
+    }
+    
+    if (max_imag > 1e-4) {
+        Serial.print(F("AVISO: Parte imaginária significativa em P: "));
+        Serial.println(max_imag, 8);
+    }
+    
+    // Forçar simetria de P (deve ser simétrica por construção)
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+            P[i * n + j] = avg;
+            P[j * n + i] = avg;
+        }
+    }
+    
+    // Verificar se P é definida positiva
+    bool is_positive_definite = true;
+    for (int i = 0; i < n && is_positive_definite; i++) {
+        if (P[i * n + i] <= 0) {
+            is_positive_definite = false;
+        }
+    }
+    
+    if (!is_positive_definite) {
+        Serial.println(F("AVISO: P não é definida positiva!"));
+    }
+    
+    unsigned long t_calc_P = micros() - t_calc_P_start;
+
+    // ========================================================================
+    // PASSO 8: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
+    // ========================================================================
+    unsigned long t_calc_K_start = micros();
+    
+    // 8.1: Calcular B^T * P
+    float* BT_P = new float[m * n];
+    matrixMultiply(BT, P, BT_P, m, n, n);
+    
+    // 8.2: Calcular B^T * P * B
+    float* BT_P_B = new float[m * m];
+    matrixMultiply(BT_P, B, BT_P_B, m, n, m);
+    
+    // 8.3: Calcular R + B^T * P * B
+    float* term = new float[m * m];
+    matrixAdd(R, BT_P_B, term, m, m);
+    
+    // 8.4: Inverter (R + B^T * P * B)
+    if (!invertMatrix(term, term, m)) {
+        Serial.println(F("Erro: não foi possível inverter (R + B^T*P*B)"));
+        delete[] AT;
+        delete[] BT;
+        delete[] BT_P;
+        delete[] BT_P_B;
+        delete[] term;
+        return false;
+    }
+    
+    // 8.5: Calcular B^T * P * A
+    float* BT_P_A = new float[m * n];
+    matrixMultiply(BT_P, A, BT_P_A, m, n, n);
+    
+    // 8.6: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
+    matrixMultiply(term, BT_P_A, K, m, m, n);
+    
+    unsigned long t_calc_K = micros() - t_calc_K_start;
+
+    // ========================================================================
+    // Limpeza de memória
+    // ========================================================================
+    unsigned long t_cleanup_start = micros();
+    
+    delete[] AT;
+    delete[] BT;
+    delete[] BT_P;
+    delete[] BT_P_B;
+    delete[] term;
+    delete[] BT_P_A;
+    
+    unsigned long t_cleanup = micros() - t_cleanup_start;
+
+    // ========================================================================
+    // Tempo total
+    // ========================================================================
+    unsigned long t_total = micros() - t_start;
+
+    // ========================================================================
+    // PRINT DETALHADO DE PERFORMANCE
+    // ========================================================================
+    if (should_print) {
+        last_print_time = current_time;
+        
+        Serial.println(F("\n========= PERFORMANCE: computeGainMatrixSchur (van Dooren) ========="));
+        Serial.println(F("\n--- MÉTODO DE VAN DOOREN (Pencil 3n x 3n) ---"));
+        Serial.print(F("Dimensão do sistema: n = "));
+        Serial.print(n);
+        Serial.print(F(", m = "));
+        Serial.print(m);
+        Serial.print(F(", Pencil: "));
+        Serial.print(pencil_size);
+        Serial.println(F(" x "));
+        Serial.println(pencil_size);
+        
+        Serial.println(F("\n--- FASE 1: ALOCAÇÃO ---"));
+        Serial.print(F("1. Alocação de memória: "));
+        Serial.print((t_alloc_end - t_alloc_start) / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 2: TRANSPOSTAS ---"));
+        Serial.print(F("2. A^T e B^T: "));
+        Serial.print(t_transpose / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 3: CONSTRUÇÃO DO PENCIL ---"));
+        Serial.print(F("3. Montagem H e J ("));
+        Serial.print(pencil_size);
+        Serial.print(F(" x "));
+        Serial.print(pencil_size);
+        Serial.print(F("): "));
+        Serial.print(t_build_pencil / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 4: DECOMPOSIÇÃO QZ (CRÍTICA - EIGEN) ---"));
+        Serial.print(F("4. Eigen::GeneralizedEigenSolver: "));
+        Serial.print(t_qz_decomp / 1000.0, 3);
+        Serial.print(F(" ms ("));
+        Serial.print((t_qz_decomp / (float)t_total) * 100, 1);
+        Serial.println(F("%)"));
+        
+        Serial.println(F("\n--- FASE 5: ORDENAÇÃO ---"));
+        Serial.print(F("5. Ordenar autovalores estáveis: "));
+        Serial.print(t_sort_eig / 1000.0, 3);
+        Serial.println(F(" ms"));
+        Serial.print(F("   Autovalores estáveis: "));
+        Serial.print(stable_indices.size());
+        Serial.print(F(" / "));
+        Serial.println(n);
+        
+        Serial.println(F("\n--- FASE 6: EXTRAÇÃO ---"));
+        Serial.print(F("6. Extrair U1, U2: "));
+        Serial.print(t_extract_subspace / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 7: SOLUÇÃO P ---"));
+        Serial.print(F("7. P = U2*inv(U1): "));
+        Serial.print(t_calc_P / 1000.0, 3);
+        Serial.print(F(" ms (cond(U1) = "));
+        Serial.print(cond, 2);
+        Serial.println(F(")"));
+        
+        Serial.println(F("\n--- FASE 8: GANHO K ---"));
+        Serial.print(F("8. K = inv(R+B^T*P*B)*B^T*P*A: "));
+        Serial.print(t_calc_K / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- FASE 9: LIMPEZA ---"));
+        Serial.print(F("9. Desalocação: "));
+        Serial.print(t_cleanup / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.println(F("\n--- RESUMO ---"));
+        Serial.print(F("TEMPO TOTAL: "));
+        Serial.print(t_total / 1000.0, 3);
+        Serial.println(F(" ms"));
+        
+        float total_ms = t_total / 1000.0;
+        Serial.println(F("\nDistribuição:"));
+        Serial.print(F("  Decomposição QZ: "));
+        Serial.print((t_qz_decomp / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("% (PRINCIPAL)"));
+        Serial.print(F("  Cálculo de P: "));
+        Serial.print((t_calc_P / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        Serial.print(F("  Cálculo de K: "));
+        Serial.print((t_calc_K / 1000.0 / total_ms) * 100, 1);
+        Serial.println(F("%"));
+        Serial.print(F("  Outras operações: "));
+        Serial.print(((t_total - t_qz_decomp - t_calc_P - t_calc_K) / 1000.0 / total_ms) * 100, 1);
         Serial.println(F("%"));
         
         Serial.println(F("====================================================================\n"));

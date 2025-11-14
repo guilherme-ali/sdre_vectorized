@@ -148,6 +148,13 @@ private:
      * @return true if successful, false otherwise
      */
     bool computeGainMatrixSchur();
+
+    /**
+     * @brief Compute the optimal gain matrix using Van Dooren's method
+     * Solves DARE using Van Dooren's algorithm for numerical stability
+     * @return true if successful, false otherwise
+     */    
+    bool computeGainMatrixVanDooren();
 };
 
 #endif
