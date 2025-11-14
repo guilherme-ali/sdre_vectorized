@@ -190,196 +190,26 @@ void setup() {
     print_matrix(Q_data, STATE_DIM_TEST, STATE_DIM_TEST, "Q");
     print_matrix(R_data, CONTROL_DIM_TEST, CONTROL_DIM_TEST, "R");
 
-    // ========================================================================
-    // COMPARAÇÃO DE DESEMPENHO: VAN DOOREN vs SCHUR
-    // ========================================================================
-    
-    Serial.println("\n╔═══════════════════════════════════════════════════════════════════╗");
-    Serial.println("║     COMPARAÇÃO DE PERFORMANCE: Van Dooren vs Schur               ║");
-    Serial.println("╚═══════════════════════════════════════════════════════════════════╝\n");
-    
-    // Variáveis para armazenar resultados
-    float K_vandooren[CONTROL_DIM_TEST * STATE_DIM_TEST];
-    float P_vandooren[STATE_DIM_TEST * STATE_DIM_TEST];
-    float K_schur[CONTROL_DIM_TEST * STATE_DIM_TEST];
-    float P_schur[STATE_DIM_TEST * STATE_DIM_TEST];
-    
-    unsigned long time_vandooren = 0;
-    unsigned long time_schur = 0;
-    
-    // ========================================================================
-    // TESTE 1: Método de Van Dooren
-    // ========================================================================
-    Serial.println("═══════════════════════════════════════════════════════════════════");
-    Serial.println("  MÉTODO 1: Van Dooren (Pencil 3n x 3n)");
-    Serial.println("═══════════════════════════════════════════════════════════════════\n");
-    
-    unsigned long t1_start = micros();
-    bool success_vandooren = lqr_test.computeGains();  // Usa Van Dooren por padrão
-    time_vandooren = micros() - t1_start;
-    
-    if (success_vandooren) {
-        lqr_test.exportGains(K_vandooren);
+    // Calcula os ganhos usando o novo método
+    Serial.println("Calculando a solução da DARE e a matriz de ganho K...");
+    bool success = lqr_test.computeGains();
+
+    if (success) {
+        Serial.println("\n--- Resultados ---");
+        
+        // Obtém e imprime a matriz de ganho K
+        float K_result[CONTROL_DIM_TEST * STATE_DIM_TEST];
+        lqr_test.exportGains(K_result);
+        print_matrix(K_result, CONTROL_DIM_TEST, STATE_DIM_TEST, "K (Ganho)");
+
+        // Obtém e imprime a matriz P (solução da DARE)
         const float* P_ptr = lqr_test.getRicattiSolution();
         if (P_ptr) {
-            memcpy(P_vandooren, P_ptr, STATE_DIM_TEST * STATE_DIM_TEST * sizeof(float));
+            print_matrix(P_ptr, STATE_DIM_TEST, STATE_DIM_TEST, "P (Solução de Riccati)");
         }
-        
-        Serial.println("\n✓ Van Dooren: Sucesso!");
-        Serial.print("  Tempo total: ");
-        Serial.print(time_vandooren / 1000.0, 3);
-        Serial.println(" ms\n");
-        
-        Serial.println("--- Resultado: Matriz K (Van Dooren) ---");
-        print_matrix(K_vandooren, CONTROL_DIM_TEST, STATE_DIM_TEST, "K_VanDooren");
-        
-    } else {
-        Serial.println("\n✗ Van Dooren: Falhou!\n");
-    }
-    
-    delay(1000);  // Pequena pausa entre testes
-    
-    // ========================================================================
-    // TESTE 2: Método de Schur
-    // ========================================================================
-    Serial.println("\n═══════════════════════════════════════════════════════════════════");
-    Serial.println("  MÉTODO 2: Schur (QZ Decomposition, Pencil 2n x 2n)");
-    Serial.println("═══════════════════════════════════════════════════════════════════\n");
-    
-    // Criar nova instância para método Schur
-    AutoLQR lqr_schur(STATE_DIM_TEST, CONTROL_DIM_TEST);
-    lqr_schur.setStateMatrix(A_data);
-    lqr_schur.setInputMatrix(B_data);
-    lqr_schur.setCostMatrices(Q_data, R_data);
-    
-    // Chamar diretamente o método Schur (precisa tornar público ou criar interface)
-    // Por enquanto, vamos medir via computeGains modificado temporariamente
-    unsigned long t2_start = micros();
-    bool success_schur = lqr_schur.computeGains();
-    time_schur = micros() - t2_start;
-    
-    if (success_schur) {
-        lqr_schur.exportGains(K_schur);
-        const float* P_ptr = lqr_schur.getRicattiSolution();
-        if (P_ptr) {
-            memcpy(P_schur, P_ptr, STATE_DIM_TEST * STATE_DIM_TEST * sizeof(float));
-        }
-        
-        Serial.println("\n✓ Schur: Sucesso!");
-        Serial.print("  Tempo total: ");
-        Serial.print(time_schur / 1000.0, 3);
-        Serial.println(" ms\n");
-        
-        Serial.println("--- Resultado: Matriz K (Schur) ---");
-        print_matrix(K_schur, CONTROL_DIM_TEST, STATE_DIM_TEST, "K_Schur");
-        
-    } else {
-        Serial.println("\n✗ Schur: Falhou!\n");
-    }
-    
-    // ========================================================================
-    // COMPARAÇÃO E ANÁLISE
-    // ========================================================================
-    if (success_vandooren && success_schur) {
-        Serial.println("\n╔═══════════════════════════════════════════════════════════════════╗");
-        Serial.println("║                    ANÁLISE COMPARATIVA                            ║");
-        Serial.println("╚═══════════════════════════════════════════════════════════════════╝\n");
-        
-        Serial.println("--- TEMPOS DE EXECUÇÃO ---");
-        Serial.print("  Van Dooren: ");
-        Serial.print(time_vandooren / 1000.0, 3);
-        Serial.println(" ms");
-        
-        Serial.print("  Schur:      ");
-        Serial.print(time_schur / 1000.0, 3);
-        Serial.println(" ms");
-        
-        Serial.println();
-        
-        // Comparação percentual
-        if (time_vandooren > time_schur) {
-            float speedup = (float)time_vandooren / (float)time_schur;
-            Serial.print("  → Schur é ");
-            Serial.print(speedup, 2);
-            Serial.print("x mais rápido (");
-            Serial.print(((time_vandooren - time_schur) * 100.0 / time_vandooren), 1);
-            Serial.println("% mais rápido)");
-        } else {
-            float speedup = (float)time_schur / (float)time_vandooren;
-            Serial.print("  → Van Dooren é ");
-            Serial.print(speedup, 2);
-            Serial.print("x mais rápido (");
-            Serial.print(((time_schur - time_vandooren) * 100.0 / time_schur), 1);
-            Serial.println("% mais rápido)");
-        }
-        
-        Serial.println("\n--- DIFERENÇA NOS RESULTADOS ---");
-        
-        // Calcular diferença nas matrizes K
-        float max_diff_K = 0.0f;
-        float avg_diff_K = 0.0f;
-        for (int i = 0; i < CONTROL_DIM_TEST * STATE_DIM_TEST; i++) {
-            float diff = fabs(K_vandooren[i] - K_schur[i]);
-            avg_diff_K += diff;
-            if (diff > max_diff_K) max_diff_K = diff;
-        }
-        avg_diff_K /= (CONTROL_DIM_TEST * STATE_DIM_TEST);
-        
-        Serial.print("  Diferença máxima em K: ");
-        Serial.println(max_diff_K, 8);
-        Serial.print("  Diferença média em K:  ");
-        Serial.println(avg_diff_K, 8);
-        
-        // Calcular diferença nas matrizes P
-        float max_diff_P = 0.0f;
-        float avg_diff_P = 0.0f;
-        for (int i = 0; i < STATE_DIM_TEST * STATE_DIM_TEST; i++) {
-            float diff = fabs(P_vandooren[i] - P_schur[i]);
-            avg_diff_P += diff;
-            if (diff > max_diff_P) max_diff_P = diff;
-        }
-        avg_diff_P /= (STATE_DIM_TEST * STATE_DIM_TEST);
-        
-        Serial.print("  Diferença máxima em P: ");
-        Serial.println(max_diff_P, 8);
-        Serial.print("  Diferença média em P:  ");
-        Serial.println(avg_diff_P, 8);
-        
-        Serial.println("\n--- CARACTERÍSTICAS DOS MÉTODOS ---");
-        Serial.println("  Van Dooren:");
-        Serial.println("    • Pencil 3n x 3n (maior dimensão)");
-        Serial.println("    • Numericamente mais estável");
-        Serial.println("    • Ideal para sistemas mal condicionados");
-        
-        Serial.println("\n  Schur:");
-        Serial.println("    • Pencil 2n x 2n (menor dimensão)");
-        Serial.println("    • Mais rápido (menos cálculos)");
-        Serial.println("    • Suficiente para sistemas bem condicionados");
-        
-        Serial.println("\n═══════════════════════════════════════════════════════════════════\n");
-    }
 
-    // APÓS: discretize_matrices();
-    
-    // Verificar propriedades das matrizes discretizadas
-    Serial.println("\n=== VERIFICAÇÃO DAS MATRIZES ===");
-    
-    // Verificar se Ad tem autovalores dentro do círculo unitário
-    Serial.println("Verificando estabilidade de Ad...");
-    
-    // Verificar controlabilidade discreta
-    Serial.println("Verificando controlabilidade...");
-    
-    // Verificar se Q é semi-definida positiva
-    Serial.println("Elementos diagonais de Q:");
-    for (int i = 0; i < STATE_DIM_TEST; i++) {
-        Serial.printf("  Q[%d,%d] = %.4f\n", i, i, Q_data[i * STATE_DIM_TEST + i]);
-    }
-    
-    // Verificar se R é definida positiva
-    Serial.println("Elementos diagonais de R:");
-    for (int i = 0; i < CONTROL_DIM_TEST; i++) {
-        Serial.printf("  R[%d,%d] = %.4f\n", i, i, R_data[i * CONTROL_DIM_TEST + i]);
+    } else {
+        Serial.println("Falha ao calcular a solução da DARE. Verifique as mensagens de erro.");
     }
     
     Serial.println("\n--- Teste Concluído ---");

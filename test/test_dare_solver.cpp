@@ -211,29 +211,6 @@ void setup() {
     } else {
         Serial.println("Falha ao calcular a solução da DARE. Verifique as mensagens de erro.");
     }
-
-    // APÓS: discretize_matrices();
-    
-    // Verificar propriedades das matrizes discretizadas
-    Serial.println("\n=== VERIFICAÇÃO DAS MATRIZES ===");
-    
-    // Verificar se Ad tem autovalores dentro do círculo unitário
-    Serial.println("Verificando estabilidade de Ad...");
-    
-    // Verificar controlabilidade discreta
-    Serial.println("Verificando controlabilidade...");
-    
-    // Verificar se Q é semi-definida positiva
-    Serial.println("Elementos diagonais de Q:");
-    for (int i = 0; i < STATE_DIM_TEST; i++) {
-        Serial.printf("  Q[%d,%d] = %.4f\n", i, i, Q_data[i * STATE_DIM_TEST + i]);
-    }
-    
-    // Verificar se R é definida positiva
-    Serial.println("Elementos diagonais de R:");
-    for (int i = 0; i < CONTROL_DIM_TEST; i++) {
-        Serial.printf("  R[%d,%d] = %.4f\n", i, i, R_data[i * CONTROL_DIM_TEST + i]);
-    }
     
     Serial.println("\n--- Teste Concluído ---");
 }
