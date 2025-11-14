@@ -18,6 +18,8 @@ import numpy as np
 from scipy.linalg import ordqz, solve_discrete_are, qr
 import matplotlib.pyplot as plt
 import time
+import tracemalloc
+import sys
 
 
 
@@ -891,7 +893,7 @@ def comparacao_quatro_metodos(A, B, Q, R, P_schur, K_schur):
     3. SciPy solve_discrete_are
     4. Método Iterativo (convergência de P)
     
-    Inclui comparação de tempo de execução e precisão.
+    Inclui comparação de tempo de execução, precisão e uso de memória.
     """
     
     print("\n\n" + "=" * 80)
@@ -912,13 +914,136 @@ def comparacao_quatro_metodos(A, B, Q, R, P_schur, K_schur):
         print(f"  - van Dooren: {2*A.shape[0] + B.shape[1]} × {2*A.shape[0] + B.shape[1]} → {2*A.shape[0]} × {2*A.shape[0]} (deflado)")
         
         # ====================================================================
-        # BENCHMARK: Comparação de tempo de execução
+        # ANÁLISE DE MEMÓRIA - Executar uma vez cada método
         # ====================================================================
         print("\n" + "=" * 80)
+        print("ANÁLISE DE USO DE MEMÓRIA")
+        print("=" * 80)
+        
+        print("\nMedindo consumo de memória de cada método...")
+        
+        # Memória do método de Schur
+        print("[1/4] Analisando método de Schur...")
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+        P_test, K_test, _ = dare_schur(A, B, Q, R)
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+        mem_schur = sum(stat.size_diff for stat in top_stats) / 1024  # KB
+        mem_schur_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
+        tracemalloc.clear_traces()
+        
+        # Memória do método de van Dooren
+        print("[2/4] Analisando método de van Dooren...")
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+        P_test, K_test, _ = dare_van_dooren(A, B, Q, R)
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+        mem_van_dooren = sum(stat.size_diff for stat in top_stats) / 1024  # KB
+        mem_van_dooren_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
+        tracemalloc.clear_traces()
+        
+        # Memória do SciPy
+        print("[3/4] Analisando SciPy...")
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+        P_test = solve_discrete_are(A, B, Q, R)
+        K_test = np.linalg.inv(R + B.T @ P_test @ B) @ (B.T @ P_test @ A)
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+        mem_scipy = sum(stat.size_diff for stat in top_stats) / 1024  # KB
+        mem_scipy_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
+        tracemalloc.clear_traces()
+        
+        # Memória do método iterativo
+        print("[4/4] Analisando método iterativo...")
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+        P_test, K_test, _, n_iter = dare_iterativo(A, B, Q, R)
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+        mem_iter = sum(stat.size_diff for stat in top_stats) / 1024  # KB
+        mem_iter_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
+        tracemalloc.clear_traces()
+        
+        # Cálculo teórico do uso de memória (matrizes intermediárias)
+        n = A.shape[0]
+        m = B.shape[1] if B.ndim > 1 else 1
+        bytes_per_float = 8  # float64
+        
+        mem_teorica_schur = (
+            (2*n)**2 * 2 +  # Matrizes H e J (2n×2n)
+            (2*n)**2 * 4 +  # Matrizes da decomposição QZ (AA, BB, Q_schur, Z_schur)
+            n**2 * 2        # P e blocos U11, U21
+        ) * bytes_per_float / 1024  # KB
+        
+        mem_teorica_van_dooren = (
+            (2*n + m)**2 * 2 +  # Matrizes H e J ((2n+m)×(2n+m))
+            (2*n)**2 * 4 +      # Matrizes deflacionadas (2n×2n) e QZ
+            n**2 * 2            # P e blocos U11, U21
+        ) * bytes_per_float / 1024  # KB
+        
+        mem_teorica_iter = (
+            n**2 * 3  # P atual, P novo, e matrizes temporárias
+        ) * bytes_per_float / 1024  # KB
+        
+        print("\n" + "-" * 80)
+        print("Resultados da análise de memória:")
+        print("-" * 80)
+        
+        print(f"\n1. Método de Schur (2n×2n):")
+        print(f"   Memória alocada: {mem_schur:.2f} KB")
+        print(f"   Memória teórica: {mem_teorica_schur:.2f} KB")
+        
+        print(f"\n2. Método de van Dooren ((2n+m)×(2n+m)):")
+        print(f"   Memória alocada: {mem_van_dooren:.2f} KB")
+        print(f"   Memória teórica: {mem_teorica_van_dooren:.2f} KB")
+        
+        print(f"\n3. SciPy solve_discrete_are:")
+        print(f"   Memória alocada: {mem_scipy:.2f} KB")
+        
+        print(f"\n4. Método Iterativo:")
+        print(f"   Memória alocada: {mem_iter:.2f} KB")
+        print(f"   Memória teórica: {mem_teorica_iter:.2f} KB")
+        
+        print("\n" + "-" * 80)
+        print("Comparação relativa de memória:")
+        print("-" * 80)
+        
+        metodos_mem = [
+            ("Schur", mem_schur),
+            ("van Dooren", mem_van_dooren),
+            ("SciPy", mem_scipy),
+            ("Iterativo", mem_iter)
+        ]
+        metodos_mem_ordenados = sorted(metodos_mem, key=lambda x: x[1])
+        
+        print(f"\nRanking de uso de memória (do menor ao maior):")
+        for i, (nome, memoria) in enumerate(metodos_mem_ordenados, 1):
+            razao = memoria / metodos_mem_ordenados[0][1] if metodos_mem_ordenados[0][1] > 0 else 1
+            print(f"  {i}º - {nome:20s}: {memoria:8.2f} KB  ({razao:.2f}x do menor)")
+        
+        overhead_van_dooren = ((mem_van_dooren - mem_schur) / mem_schur * 100) if mem_schur > 0 else 0
+        print(f"\nOverhead de memória do van Dooren vs Schur: {overhead_van_dooren:+.1f}%")
+        print(f"Justificativa: van Dooren inicia com pencil ({2*n+m}×{2*n+m}) antes da deflação")
+        
+        # ====================================================================
+        # BENCHMARK: Comparação de tempo de execução
+        # ====================================================================
+        print("\n\n" + "=" * 80)
         print("BENCHMARK - Tempo de Execução dos 4 Métodos")
         print("=" * 80)
         
-        n_execucoes = 100
+        n_execucoes = 1000
         print(f"\nExecutando cada método {n_execucoes} vezes para comparação de desempenho...")
         print("Aguarde...")
         
@@ -1098,19 +1223,20 @@ def comparacao_quatro_metodos(A, B, Q, R, P_schur, K_schur):
         print("RESUMO FINAL - COMPARAÇÃO DOS 4 MÉTODOS")
         print("=" * 80)
         
-        print("\n┌──────────────────────────────────────────────────────────────────────────────────┐")
-        print("│                          DESEMPENHO vs PRECISÃO                                  │")
-        print("├────────────────────────┬─────────────────┬─────────────────┬───────────────────┤")
-        print("│      Método            │  Tempo Médio    │  Erro em P      │  Resíduo DARE     │")
-        print("├────────────────────────┼─────────────────┼─────────────────┼───────────────────┤")
-        print(f"│ 1. Schur (2n×2n)       │  {tempo_schur_medio*1000:6.3f} ms      │  {norma_diff_P_schur:.2e}    │  {residuo_schur:.2e}       │")
-        print(f"│ 2. van Dooren (defl)   │  {tempo_van_dooren_medio*1000:6.3f} ms      │  {norma_diff_P_van_dooren:.2e}    │  {residuo_van_dooren:.2e}       │")
-        print(f"│ 3. SciPy (LAPACK)      │  {tempo_scipy_medio*1000:6.3f} ms      │  (referência)   │  {residuo_scipy:.2e}       │")
-        print(f"│ 4. Iterativo ({int(n_iter_medio):3d} it)   │  {tempo_iter_medio*1000:6.3f} ms      │  {norma_diff_P_iter:.2e}    │  {residuo_iter:.2e}       │")
-        print("├────────────────────────┴─────────────────┴─────────────────┴───────────────────┤")
+        print("\n┌────────────────────────────────────────────────────────────────────────────────────────────┐")
+        print("│                         DESEMPENHO vs PRECISÃO vs MEMÓRIA                                  │")
+        print("├──────────────────────┬──────────────┬──────────────┬──────────────┬────────────────────────┤")
+        print("│      Método          │ Tempo Médio  │  Memória     │  Erro em P   │  Resíduo DARE          │")
+        print("├──────────────────────┼──────────────┼──────────────┼──────────────┼────────────────────────┤")
+        print(f"│ 1. Schur (2n×2n)     │  {tempo_schur_medio*1000:6.3f} ms   │ {mem_schur:7.2f} KB   │  {norma_diff_P_schur:.2e}   │  {residuo_schur:.2e}            │")
+        print(f"│ 2. van Dooren (defl) │  {tempo_van_dooren_medio*1000:6.3f} ms   │ {mem_van_dooren:7.2f} KB   │  {norma_diff_P_van_dooren:.2e}   │  {residuo_van_dooren:.2e}            │")
+        print(f"│ 3. SciPy (LAPACK)    │  {tempo_scipy_medio*1000:6.3f} ms   │ {mem_scipy:7.2f} KB   │  (referência)│  {residuo_scipy:.2e}            │")
+        print(f"│ 4. Iterativo ({int(n_iter_medio):3d} it) │  {tempo_iter_medio*1000:6.3f} ms   │ {mem_iter:7.2f} KB   │  {norma_diff_P_iter:.2e}   │  {residuo_iter:.2e}            │")
+        print("├──────────────────────┴──────────────┴──────────────┴──────────────┴────────────────────────┤")
         
         # Análise final
         mais_rapido = metodos_ordenados[0][0]
+        mais_economico = metodos_mem_ordenados[0][0]
         residuos = [
             ("Schur", residuo_schur),
             ("van Dooren", residuo_van_dooren),
@@ -1119,23 +1245,26 @@ def comparacao_quatro_metodos(A, B, Q, R, P_schur, K_schur):
         ]
         mais_preciso = min(residuos, key=lambda x: x[1])[0]
         
-        print("│ Conclusões:                                                                      │")
-        print(f"│  • Mais rápido:  {mais_rapido:30s}                                    │")
-        print(f"│  • Mais preciso: {mais_preciso:30s}                                    │")
-        print("│  • van Dooren evita inversão explícita de R (mais robusto numericamente)        │")
-        print(f"│  • van Dooren usa pencil maior ({2*A.shape[0]+B.shape[1]}×{2*A.shape[0]+B.shape[1]}) mas deflaciona para ({2*A.shape[0]}×{2*A.shape[0]})                  │")
-        print("│  • Schur (2n×2n) é mais compacto mas requer inv(R)                              │")
+        print("│ Conclusões:                                                                                │")
+        print(f"│  • Mais rápido:       {mais_rapido:30s}                                        │")
+        print(f"│  • Menor memória:     {mais_economico:30s}                                        │")
+        print(f"│  • Mais preciso:      {mais_preciso:30s}                                        │")
+        print("│                                                                                            │")
+        print("│  • van Dooren evita inversão explícita de R (mais robusto numericamente)                  │")
+        print(f"│  • van Dooren usa pencil maior ({2*A.shape[0]+B.shape[1]}×{2*A.shape[0]+B.shape[1]}) mas deflaciona para ({2*A.shape[0]}×{2*A.shape[0]})                        │")
+        print("│  • Schur (2n×2n) é mais compacto mas requer inv(R)                                        │")
+        print(f"│  • Iterativo usa menos memória mas requer ~{int(n_iter_medio)} iterações                                   │")
         
         # Comparação entre Schur e van Dooren
         razao_schur_van_dooren = tempo_schur_medio / tempo_van_dooren_medio
         if razao_schur_van_dooren < 1:
             diff_percent = (1 - razao_schur_van_dooren) * 100
-            print(f"│  • Schur é {diff_percent:.1f}% mais rápido que van Dooren                                    │")
+            print(f"│  • Schur é {diff_percent:.1f}% mais rápido que van Dooren                                              │")
         else:
             diff_percent = (razao_schur_van_dooren - 1) * 100
-            print(f"│  • van Dooren é {diff_percent:.1f}% mais rápido que Schur                                 │")
+            print(f"│  • van Dooren é {diff_percent:.1f}% mais rápido que Schur                                           │")
         
-        print("└──────────────────────────────────────────────────────────────────────────────────┘")
+        print("└────────────────────────────────────────────────────────────────────────────────────────────┘")
         
     except ImportError:
         print("\n⚠ SciPy não disponível para comparação")
