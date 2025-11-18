@@ -13,16 +13,16 @@ const int CONTROL_DIM_TEST = 3;
 AutoLQR lqr_test(STATE_DIM_TEST, CONTROL_DIM_TEST);
 
 // Parâmetros físicos do sistema (do arquivo main copy.cpp.txt)
-const float Ixx = 1e-5;  // kg·m²
-const float Iyy = 1e-5;  // kg·m²
-const float Izz = 1e-5;  // kg·m²
-const float Ir = 1e-5;   // kg·m²
+const float Ixx = 16.57e-6;  // kg·m²
+const float Iyy = 16.57e-6;  // kg·m²
+const float Izz = 29.80e-6;  // kg·m²
+const float Ir = 1e-9;   // kg·m²
 const float omega_r = 0;
 
 // Valores de roll, pitch, yaw, p, q, r para o teste
-const float roll = 0.0f;
-const float pitch = 0.0f;
-const float yaw = 0.0f;
+const float roll = 0.1f;
+const float pitch = -0.2f;
+const float yaw = 0.15f;
 const float p = 0.0f;
 const float q = 0.0f;
 const float r = 0.0f;
