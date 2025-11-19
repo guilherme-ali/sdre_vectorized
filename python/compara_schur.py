@@ -446,15 +446,15 @@ def exemplo_sistema_6x6():
     print("=" * 80)
     
     # Parâmetros físicos do sistema (do código C++)
-    Ixx = 1e-5  # kg·m²
-    Iyy = 1e-5  # kg·m²
-    Izz = 1e-5  # kg·m²
-    Ir = 1e-5   # kg·m²
+    Ixx = 16.57e-6  # kg·m²
+    Iyy = 16.57e-6  # kg·m²
+    Izz = 29.80e-6  # kg·m²
+    Ir = 1e-9   # kg·m²
     omega_r = 0
     
     # Valores de roll, pitch, yaw, p, q, r (do código C++)
-    roll = 0.0
-    pitch = 0.0
+    roll = 0.1
+    pitch = -0.2
     yaw = 0.0
     p = 0.0
     q = 0.0
