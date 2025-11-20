@@ -139,20 +139,18 @@ const float* AutoLQR::getRicattiSolution() const
 bool AutoLQR::computeGainMatrix()
 {
     // Implementação do Structure-preserving Doubling Algorithm (SDA)
-    // Convergência quadrática (muito mais rápida que iteração simples)
+    // Para DARE: A'·P·A - P - A'·P·B·(R + B'·P·B)^(-1)·B'·P·A + Q = 0
     
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
-    // Check if system is controllable
     if (!isSystemControllable()) {
         return false;
     }
 
     unsigned long t_start = micros();
 
-    // Alocação de memória para o SDA
-    // Precisamos de buffers para Ak, Gk, Hk e seus próximos estados
+    // Alocação de memória
     float* Ak = new float[stateSize * stateSize]();
     float* Gk = new float[stateSize * stateSize]();
     float* Hk = new float[stateSize * stateSize]();
@@ -161,26 +159,28 @@ bool AutoLQR::computeGainMatrix()
     float* Gk_next = new float[stateSize * stateSize]();
     float* Hk_next = new float[stateSize * stateSize]();
     
-    // Matrizes auxiliares
     float* R_inv = new float[controlSize * controlSize]();
     float* BT = new float[controlSize * stateSize]();
     float* AT = new float[stateSize * stateSize]();
-    float* W = new float[stateSize * stateSize](); // (I + Gk*Hk)^-1
+    float* W = new float[stateSize * stateSize]();
     float* Temp1 = new float[stateSize * stateSize]();
     float* Temp2 = new float[stateSize * stateSize]();
-    float* Temp3 = new float[stateSize * stateSize](); // Buffer extra
+    float* Temp3 = new float[stateSize * stateSize]();
     
-    // 1. Inicialização
-    // Ak = A
+    // ========================================================================
+    // INICIALIZAÇÃO CORRETA DO SDA PARA DARE
+    // ========================================================================
+    
+    // 1. Ak = A (correto)
     matrixCopy(A, Ak, stateSize * stateSize);
     
-    // Hk = Q
-    matrixCopy(Q, Hk, stateSize * stateSize);
+    // 2. Calcular transpostas
+    transposeMatrix(A, AT, stateSize, stateSize);
+    transposeMatrix(B, BT, stateSize, controlSize);
     
-    // Calcular Gk = B * R^-1 * B'
+    // 3. Calcular R_inv
     matrixCopy(R, R_inv, controlSize * controlSize);
     if (!invertMatrix(R_inv, R_inv, controlSize)) {
-        // Limpeza em caso de falha
         delete[] Ak; delete[] Gk; delete[] Hk;
         delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
         delete[] R_inv; delete[] BT; delete[] AT;
@@ -188,129 +188,102 @@ bool AutoLQR::computeGainMatrix()
         return false;
     }
     
-    transposeMatrix(B, BT, stateSize, controlSize);
-    
-    // Temp1 = B * R^-1 (state x control)
-    // Nota: Usando Temp1 como buffer temporário de tamanho misto, cuidado com limites
+    // 4. Gk = B * R^(-1) * B' (correto)
     float* B_Rinv = new float[stateSize * controlSize];
     matrixMultiply(B, R_inv, B_Rinv, stateSize, controlSize, controlSize);
-    
-    // Gk = (B * R^-1) * B'
     matrixMultiply(B_Rinv, BT, Gk, stateSize, controlSize, stateSize);
     delete[] B_Rinv;
 
-    // 2. Loop SDA
-    const int maxIterations = 50; // SDA converge muito rápido (geralmente < 20)
+    // 5. CORREÇÃO CRÍTICA: Hk = Q (não A'·Q·A + Q)
+    // Para o SDA aplicado à DARE, a inicialização correta é simplesmente Q
+    matrixCopy(Q, Hk, stateSize * stateSize);
+
+    // ========================================================================
+    // LOOP SDA
+    // ========================================================================
+    const int maxIterations = 1000;
     const float tolerance = 1e-6f;
     bool converged = false;
 
     for (int iter = 0; iter < maxIterations; iter++) {
-        // W = (I + Gk * Hk)^-1
-        
-        // Temp1 = Gk * Hk
+        // W = (I + Gk·Hk)^(-1)
         matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
         
-        // Temp1 = I + Gk * Hk
         for (int i = 0; i < stateSize; i++) {
             Temp1[i * stateSize + i] += 1.0f;
         }
         
-        // Inverter para obter W
         matrixCopy(Temp1, W, stateSize * stateSize);
         if (!invertMatrix(W, W, stateSize)) {
-            break; // Falha na inversão (singularidade)
+            break;
         }
         
-        // Pré-cálculos para atualização
-        // Temp1 = Ak * W
+        // Temp1 = Ak·W
         matrixMultiply(Ak, W, Temp1, stateSize, stateSize, stateSize);
         
-        // Atualizar Ak: Ak_next = Ak * W * Ak = Temp1 * Ak
+        // Ak_next = Temp1·Ak = (Ak·W)·Ak
         matrixMultiply(Temp1, Ak, Ak_next, stateSize, stateSize, stateSize);
         
-        // Atualizar Gk: Gk_next = Gk + Ak * W * Gk * Ak'
-        // Parte 1: Temp2 = Gk * Ak'
+        // Gk_next = Gk + (Ak·W)·Gk·Ak'
         transposeMatrix(Ak, AT, stateSize, stateSize);
         matrixMultiply(Gk, AT, Temp2, stateSize, stateSize, stateSize);
-        
-        // Parte 2: Temp3 = (Ak * W) * (Gk * Ak') = Temp1 * Temp2
         matrixMultiply(Temp1, Temp2, Temp3, stateSize, stateSize, stateSize);
-        
-        // Parte 3: Soma com Gk atual
         matrixAdd(Gk, Temp3, Gk_next, stateSize, stateSize);
         
-        // Atualizar Hk: Hk_next = Hk + Ak' * Hk * W * Ak
-        // Note que Hk * W * Ak é a transposta de Ak * W' * Hk...
-        // Mas podemos calcular direto:
-        
-        // Temp2 = Hk * Temp1 (onde Temp1 é Ak*W) -> Isso não está certo dimensionalmente se não for simétrico
-        // Vamos fazer passo a passo: Hk_next = Hk + AT * Hk * (W * Ak)
-        
-        // Temp2 = W * Ak
+        // Hk_next = Hk + Ak'·Hk·W·Ak
         matrixMultiply(W, Ak, Temp2, stateSize, stateSize, stateSize);
-        
-        // Temp3 = Hk * Temp2
         matrixMultiply(Hk, Temp2, Temp3, stateSize, stateSize, stateSize);
-        
-        // Temp2 = AT * Temp3
         matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
-        
-        // Soma final
         matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
         
-        // Verificação de convergência (baseada na mudança de Hk)
+        // Verificar convergência
         float diff = 0;
         for (int i = 0; i < stateSize * stateSize; i++) {
             diff += fabsf(Hk_next[i] - Hk[i]);
         }
         
-        // Atualizar ponteiros (swap) ou copiar
+        // Atualizar
         matrixCopy(Ak_next, Ak, stateSize * stateSize);
         matrixCopy(Gk_next, Gk, stateSize * stateSize);
         matrixCopy(Hk_next, Hk, stateSize * stateSize);
         
         if (diff < tolerance) {
             converged = true;
-            // Serial.print("SDA Converged in iterations: "); Serial.println(iter + 1);
             break;
         }
     }
 
-    // O resultado P é o limite de Hk
+    // P = Hk (solução final)
     matrixCopy(Hk, P, stateSize * stateSize);
 
-    // 3. Calcular K final: K = (R + B'PB)^-1 * B'PA
-    // Reutilizando buffers existentes
+    // ========================================================================
+    // CÁLCULO DO GANHO K
+    // ========================================================================
+    // K = (R + B'·P·B)^(-1) · B'·P·A
     
-    // Temp1 (control x state) = B' * P
-    // Precisamos realocar ou usar buffers compatíveis. 
-    // Vamos usar buffers dedicados para esta etapa final para evitar confusão de tamanho
+    float* BT_P = new float[controlSize * stateSize];
+    float* BT_P_B = new float[controlSize * controlSize];
+    float* BT_P_A = new float[controlSize * stateSize];
+    float* R_plus_BTPB = new float[controlSize * controlSize];
     
-    float* K_temp1 = new float[controlSize * stateSize]; // B'P
-    float* K_temp2 = new float[controlSize * controlSize]; // R + B'PB
-    float* K_temp3 = new float[controlSize * stateSize]; // B'PA
+    // BT_P = B'·P
+    matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
     
-    // B'P
-    matrixMultiply(BT, P, K_temp1, controlSize, stateSize, stateSize);
+    // BT_P_B = (B'·P)·B
+    matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
     
-    // B'PB
-    float* K_temp_small = new float[controlSize * controlSize];
-    matrixMultiply(K_temp1, B, K_temp_small, controlSize, stateSize, controlSize);
+    // R_plus_BTPB = R + B'·P·B
+    matrixAdd(R, BT_P_B, R_plus_BTPB, controlSize, controlSize);
     
-    // R + B'PB
-    matrixAdd(R, K_temp_small, K_temp2, controlSize, controlSize);
-    delete[] K_temp_small;
-    
-    // Inverter (R + B'PB)
-    if (!invertMatrix(K_temp2, K_temp2, controlSize)) {
-        // Falha
+    // Inverter
+    if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, controlSize)) {
         converged = false;
     } else {
-        // B'PA
-        matrixMultiply(K_temp1, A, K_temp3, controlSize, stateSize, stateSize);
+        // BT_P_A = (B'·P)·A
+        matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
         
-        // K = inv(...) * B'PA
-        matrixMultiply(K_temp2, K_temp3, K, controlSize, controlSize, stateSize);
+        // K = (R + B'·P·B)^(-1) · (B'·P·A)
+        matrixMultiply(R_plus_BTPB, BT_P_A, K, controlSize, controlSize, stateSize);
     }
 
     // Limpeza
@@ -318,7 +291,7 @@ bool AutoLQR::computeGainMatrix()
     delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
     delete[] R_inv; delete[] BT; delete[] AT;
     delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
-    delete[] K_temp1; delete[] K_temp2; delete[] K_temp3;
+    delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] R_plus_BTPB;
 
     return converged;
 }

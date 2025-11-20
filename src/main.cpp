@@ -31,10 +31,10 @@ unsigned long execution_count = 0;
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
 
-const float Ixx = 2.1e-5;  // 0.000021 kg·m² (roll)
-const float Iyy = 2.1e-5;  // 0.000021 kg·m² (pitch)
-const float Izz = 3.2e-5;  // 0.000032 kg·m² (yaw)
-const float Ir = 1.0e-6;   // 0.000001 kg·m² (inércia do rotor)
+const float Ixx = 16.57e-6;  // 0.000021 kg·m² (roll)
+const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
+const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
+const float Ir = 1.0e-9;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.040;     // 40g
 float omega_r = 0;
 const float MOTOR_B_COEFF = 3.9e-5;   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²] 3.9e-8
@@ -321,7 +321,7 @@ void loop(){
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
-    yaw = 0 ; // Zera o yaw para evitar deriva
+    yaw = 0.0f ; // Zera o yaw para evitar deriva
 
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
