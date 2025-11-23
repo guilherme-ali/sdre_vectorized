@@ -552,6 +552,10 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     // Atualiza a matriz A contínua com as velocidades angulares atuais
     // As três primeiras linhas permanecem constantes
 
+    float alpha_1 = 0.5f;
+    float alpha_2 = 0.5f;
+    float alpha_3 = 0.5f;      
+
     float sin_roll = sin(roll);
     float cos_roll = cos(roll);
     float cos_pitch = cos(pitch);
@@ -569,19 +573,19 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     A[2 * STATE_SIZE + 5] = cos_roll * inv_cos_pitch;
     
     // Linha 4 (índice 3)
-    A[3 * STATE_SIZE + 4] = ((Iyy - Izz) / (2 * Ixx)) * r - Ir * omega_r / Ixx;
-    A[3 * STATE_SIZE + 5] = ((Iyy - Izz) / (2 * Ixx)) * q;
+    A[3 * STATE_SIZE + 4] = alpha_1 * ((Iyy - Izz) / Ixx) * r - Ir * omega_r / Ixx;
+    A[3 * STATE_SIZE + 5] = (1 - alpha_1) * ((Iyy - Izz) / Ixx) * q;
     
     // Linha 5 (índice 4)
-    A[4 * STATE_SIZE + 3] = ((Izz - Ixx) / (2 * Iyy)) * r - Ir * omega_r / Iyy;
-    A[4 * STATE_SIZE + 5] = ((Izz - Ixx) / (2 * Iyy)) * p;
+    A[4 * STATE_SIZE + 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r - Ir * omega_r / Iyy;
+    A[4 * STATE_SIZE + 5] = (1 - alpha_2) * ((Izz - Ixx) / Iyy) * p;
     
     // Linha 6 (índice 5)
-    A[5 * STATE_SIZE + 3] = ((Ixx - Iyy) / (2 * Izz)) * q;
-    A[5 * STATE_SIZE + 4] = ((Ixx - Iyy) / (2 * Izz)) * p;
+    A[5 * STATE_SIZE + 3] = alpha_3 * ((Ixx - Iyy) / Izz) * q;
+    A[5 * STATE_SIZE + 4] = (1 - alpha_3) * ((Ixx - Iyy) / Izz) * p;
     
     // Discretiza a matriz A atualizada
-    float samplingTime = 0.01; // Mesmo tempo de amostragem do setup()
+    float dt = 0.01; // Mesmo tempo de amostragem do setup()
 
     // Calcula A^2 para melhor aproximação da discretização
     float A2[STATE_SIZE * STATE_SIZE] = {0};
@@ -591,11 +595,11 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < STATE_SIZE; j++) {
             if (i == j) {
-                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * samplingTime + 
-                                       A2[i * STATE_SIZE + j] * samplingTime * samplingTime * 0.5f;
+                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * dt + 
+                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
             } else {
-                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * samplingTime + 
-                                       A2[i * STATE_SIZE + j] * samplingTime * samplingTime * 0.5f;
+                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * dt + 
+                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
             }
         }
     }
@@ -604,7 +608,6 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     float AB[STATE_SIZE * CONTROL_SIZE] = {0};
     MatrixOperations::matrixMultiply(A, B, AB, STATE_SIZE, STATE_SIZE, CONTROL_SIZE);
 
-    float dt = samplingTime;
     float dt2_over_2 = dt * dt * 0.5f;
 
     for (int i = 0; i < STATE_SIZE; i++) {
