@@ -47,6 +47,8 @@ void start_IMU_MPU9250(MPU9250& IMU) {
 void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     // Inicializa I2C com os pinos corretos para ESP32-S2
     Wire.begin(11, 10); // SDA = GPIO11, SCL = GPIO10
+
+    Wire.setClock(1000000); // Fast Mode (padrão é 100kHz)
     
     if (!mpu.begin(0x68, &Wire)) {
         Serial.println("Falha ao inicializar MPU6050!");
