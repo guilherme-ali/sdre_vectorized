@@ -148,6 +148,11 @@ bool AutoLQR::computeGainMatrix()
         return false;
     }
 
+    // Controle de frequência de print (1Hz)
+    static unsigned long last_print_time = 0;
+    unsigned long current_time = millis();
+    bool should_print = (current_time - last_print_time >= 1000);
+
     unsigned long t_start = micros();
 
     // Alocação de memória
@@ -201,11 +206,14 @@ bool AutoLQR::computeGainMatrix()
     // ========================================================================
     // LOOP SDA
     // ========================================================================
-    const int maxIterations = 1000;
-    const float tolerance = 1e-6f;
+    const int maxIterations = 5000;
+    const float tolerance = 1e-9f;
     bool converged = false;
+    int actual_iterations = 0; // ← CONTADOR DE ITERAÇÕES
 
     for (int iter = 0; iter < maxIterations; iter++) {
+        actual_iterations++; // ← INCREMENTAR CONTADOR
+        
         // W = (I + Gk·Hk)^(-1)
         matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
         
@@ -284,6 +292,42 @@ bool AutoLQR::computeGainMatrix()
         
         // K = (R + B'·P·B)^(-1) · (B'·P·A)
         matrixMultiply(R_plus_BTPB, BT_P_A, K, controlSize, controlSize, stateSize);
+    }
+
+    unsigned long t_total = micros() - t_start;
+
+    // ========================================================================
+    // PRINT COM NÚMERO DE ITERAÇÕES
+    // ========================================================================
+    if (should_print) {
+        last_print_time = current_time;
+        
+        Serial.println(F("\n========= SDA (Structure-preserving Doubling) ========="));
+        Serial.print(F("Dimensão: n="));
+        Serial.print(stateSize);
+        Serial.print(F(", m="));
+        Serial.println(controlSize);
+        
+        Serial.print(F("Iterações: "));
+        Serial.print(actual_iterations);
+        Serial.print(F(" / "));
+        Serial.print(maxIterations);
+        if (converged) {
+            Serial.println(F(" ✓ CONVERGIDO"));
+        } else {
+            Serial.println(F(" ✗ NÃO CONVERGIU"));
+        }
+        
+        Serial.print(F("Tempo total: "));
+        Serial.print(t_total / 1000.0f, 3);
+        Serial.println(F(" ms"));
+        
+        Serial.print(F("Tempo/iteração: "));
+        Serial.print((t_total / (float)actual_iterations) / 1000.0f, 3);
+        Serial.println(F(" ms"));
+        
+        
+        Serial.println(F("=======================================================\n"));
     }
 
     // Limpeza
