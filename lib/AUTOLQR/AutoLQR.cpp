@@ -136,7 +136,7 @@ const float* AutoLQR::getRicattiSolution() const
     return P;
 }
 
-bool AutoLQR::computeGainMatrix()
+bool AutoLQR::computeGainMatrixSDA()
 {
     // Implementação do Structure-preserving Doubling Algorithm (SDA)
     // Para DARE: A'·P·A - P - A'·P·B·(R + B'·P·B)^(-1)·B'·P·A + Q = 0
