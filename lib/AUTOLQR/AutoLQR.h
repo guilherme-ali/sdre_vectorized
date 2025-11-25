@@ -155,6 +155,13 @@ private:
      * @return true if successful, false otherwise
      */    
     bool computeGainMatrixVanDooren();
+
+    /**
+     * @brief Compute the optimal gain matrix using SDA method
+     * Solves DARE using State-dependent Riccati Equation for adaptive control
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixSDA();
 };
 
 #endif

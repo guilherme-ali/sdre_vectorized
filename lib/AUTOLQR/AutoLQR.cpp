@@ -76,7 +76,7 @@ void AutoLQR::setGains(const float* inputK)
 bool AutoLQR::computeGains()
 {
     // Usa método de Schur ao invés do método iterativo
-    bool K_flag = computeGainMatrix();
+    bool K_flag = computeGainMatrixSDA();
     if (!K_flag)
         return false;
     
