@@ -1138,7 +1138,7 @@ void AutoLQR::estimateFeedforwardGain(float* ffGain, const float* desiredState)
     if (stateSize == 2 && controlSize == 1) {
         // Special case for position-velocity systems
         float Bsq = B[0] * B[0] + B[1] * B[1];
-        if Bsq < 1e-6)
+        if (Bsq < 1e-6)
             return;
 
         float invBsq = 1.0f / Bsq;
