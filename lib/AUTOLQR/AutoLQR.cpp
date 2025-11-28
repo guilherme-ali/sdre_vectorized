@@ -1,6 +1,7 @@
 #include "AutoLQR.h"
 #include <math.h>
 #include <ArduinoEigen.h>
+#include <string.h>  // Para strcmp
 
 AutoLQR::AutoLQR(int stateSize, int controlSize)
     : stateSize(stateSize)
@@ -73,13 +74,26 @@ void AutoLQR::setGains(const float* inputK)
     matrixCopy(inputK, K, controlSize * stateSize);
 }
 
-bool AutoLQR::computeGains()
+bool AutoLQR::computeGains(const char* method)
 {
-    // Usa método de Schur ao invés do método iterativo
-    bool K_flag = computeGainMatrixSDA();
+    bool K_flag = false;
+    
+    if (strcmp(method, "SDA") == 0) {
+        K_flag = computeGainMatrixSDA();
+    } else if (strcmp(method, "SCHUR") == 0) {
+        K_flag = computeGainMatrixSchur();
+    } else if (strcmp(method, "VAN_DOOREN") == 0) {
+        K_flag = computeGainMatrixVanDooren();
+    } else {
+        // Método padrão: SDA
+        Serial.print(F("Método desconhecido: "));
+        Serial.print(method);
+        Serial.println(F(". Usando SDA."));
+        K_flag = computeGainMatrixSDA();
+    }
+    
     if (!K_flag)
         return false;
-    
 
     bool Kr_flag = computeGainMatrixKr();
     return Kr_flag;
@@ -468,7 +482,7 @@ bool AutoLQR::computeGainMatrixSchur()
     unsigned long t_qz_decomp = micros() - t_qz_start;
     
     // ========================================================================
-    // PASSO 6: Ordenar autovalores estáveis (|λ| < 1)
+    // PASSO 6: Ordenar autovetores estáveis (|λ| < 1)
     // ========================================================================
     unsigned long t_sort_start = micros();
     
@@ -489,7 +503,7 @@ bool AutoLQR::computeGainMatrixSchur()
     if (stable_indices.size() != static_cast<size_t>(n)) {
         Serial.print(F("Erro: encontrados "));
         Serial.print(stable_indices.size());
-        Serial.print(F(" autovalores estáveis, esperados "));
+        Serial.print(F(" autovetores estáveis, esperados "));
         Serial.println(n);
         delete[] R_inv; delete[] BT; delete[] AT;
         delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
@@ -1124,7 +1138,7 @@ void AutoLQR::estimateFeedforwardGain(float* ffGain, const float* desiredState)
     if (stateSize == 2 && controlSize == 1) {
         // Special case for position-velocity systems
         float Bsq = B[0] * B[0] + B[1] * B[1];
-        if (Bsq < 1e-6)
+        if Bsq < 1e-6)
             return;
 
         float invBsq = 1.0f / Bsq;

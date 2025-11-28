@@ -44,7 +44,7 @@ public:
      * @brief Compute optimal feedback gains
      * @return true if successful, false if computation fails
      */
-    bool computeGains();
+    bool computeGains(const char* method = "SDA");
 
     /**
      * @brief Update the controller with current state
