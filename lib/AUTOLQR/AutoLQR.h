@@ -162,6 +162,13 @@ private:
      * @return true if successful, false otherwise
      */
     bool computeGainMatrixSDA();
+
+    /**
+     * @brief Compute the optimal gain matrix using Iterative method
+     * Solves DARE using basic iterative approach for simplicity
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixIterative(); 
 };
 
 #endif
