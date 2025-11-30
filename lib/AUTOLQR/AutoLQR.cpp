@@ -1231,16 +1231,11 @@ float AutoLQR::calculateExpectedCost()
 
 bool AutoLQR::computeGainMatrixIterative()
 {
-    // Método Iterativo de Riccati com Warm Start para DARE (Discrete-time)
-    // Iteração de Riccati discreta:
-    // P_new = Q + A'·P·A - A'·P·B·(R + B'·P·B)^(-1)·B'·P·A
+    // Método Iterativo de Riccati com Warm Start para DARE
+    // OTIMIZADO para ESP32
     
     if (!A || !B || !Q || !R || !K || !P)
         return false;
-
-    if (!isSystemControllable()) {
-        return false;
-    }
 
     // Controle de frequência de print (1Hz)
     static unsigned long last_print_time = 0;
@@ -1249,7 +1244,7 @@ bool AutoLQR::computeGainMatrixIterative()
 
     unsigned long t_start = micros();
 
-    // Verifica se P já foi inicializado (warm start)
+    // Verificar warm start
     bool has_warm_start = false;
     float P_norm = 0.0f;
     for (int i = 0; i < stateSize * stateSize; i++) {
@@ -1257,198 +1252,170 @@ bool AutoLQR::computeGainMatrixIterative()
     }
     has_warm_start = (P_norm > 1e-6f);
 
-    // Se não tem warm start, inicializa P = Q (boa estimativa inicial)
+    // Se não tem warm start, inicializa P = Q
     if (!has_warm_start) {
         matrixCopy(Q, P, stateSize * stateSize);
     }
 
-    // Alocação de memória
-    float* P_new = new float[stateSize * stateSize]();
-    float* AT = new float[stateSize * stateSize]();
-    float* BT = new float[controlSize * stateSize]();
-    float* P_A = new float[stateSize * stateSize]();
-    float* AT_P_A = new float[stateSize * stateSize]();
-    float* P_B = new float[stateSize * controlSize]();
-    float* BT_P = new float[controlSize * stateSize]();
-    float* BT_P_B = new float[controlSize * controlSize]();
-    float* BT_P_A = new float[controlSize * stateSize]();
-    float* R_plus_BTPB = new float[controlSize * controlSize]();
-    float* R_plus_BTPB_inv = new float[controlSize * controlSize]();
-    float* K_temp = new float[controlSize * stateSize]();
-    float* Temp1 = new float[stateSize * stateSize]();
+    // Pré-alocação de memória (uma vez só)
+    const int n = stateSize;
+    const int m = controlSize;
+    const int nn = n * n;
+    const int nm = n * m;
+    const int mm = m * m;
+    
+    float* P_new = new float[nn]();
+    float* AT = new float[nn]();
+    float* BT = new float[nm]();
+    float* PA = new float[nn]();
+    float* PB = new float[nm]();
+    float* ATPA = new float[nn]();
+    float* BTPB = new float[mm]();
+    float* BTPA = new float[m * n]();
+    float* S = new float[mm]();          // R + B'PB
+    float* S_inv = new float[mm]();
+    float* K_temp = new float[m * n]();
+    float* ATPB = new float[nm]();
+    float* correction = new float[nn]();
 
-    // Calcula transpostas (constantes durante iteração)
-    transposeMatrix(A, AT, stateSize, stateSize);
-    transposeMatrix(B, BT, stateSize, controlSize);
+    // Calcular transpostas (constantes)
+    transposeMatrix(A, AT, n, n);
+    transposeMatrix(B, BT, n, m);
 
-    const int maxIterations = 1000;
+    const int maxIterations = 200;  // Reduzido - warm start converge rápido
     const float tolerance = 1e-6f;
     bool converged = false;
     int actual_iterations = 0;
-    float last_diff = 1e10f;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         actual_iterations++;
 
         // ================================================================
-        // ITERAÇÃO DE RICCATI DISCRETA (DARE)
-        // P_new = Q + A'·P·A - A'·P·B·(R + B'·P·B)^(-1)·B'·P·A
+        // ITERAÇÃO DARE OTIMIZADA
+        // P_new = Q + A'PA - A'PB(R + B'PB)^{-1}B'PA
         // ================================================================
 
-        // 1. P_A = P · A
-        matrixMultiply(P, A, P_A, stateSize, stateSize, stateSize);
-
-        // 2. AT_P_A = A' · P · A
-        matrixMultiply(AT, P_A, AT_P_A, stateSize, stateSize, stateSize);
-
-        // 3. P_B = P · B
-        matrixMultiply(P, B, P_B, stateSize, stateSize, controlSize);
-
-        // 4. BT_P = B' · P
-        matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
-
-        // 5. BT_P_B = B' · P · B
-        matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
-
-        // 6. BT_P_A = B' · P · A
-        matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
-
-        // 7. R_plus_BTPB = R + B' · P · B
-        matrixAdd(R, BT_P_B, R_plus_BTPB, controlSize, controlSize);
-
-        // 8. Inverte (R + B' · P · B) com regularização se necessário
-        matrixCopy(R_plus_BTPB, R_plus_BTPB_inv, controlSize * controlSize);
+        // PA = P * A
+        matrixMultiply(P, A, PA, n, n, n);
         
-        // Adiciona pequena regularização para estabilidade numérica
-        for (int i = 0; i < controlSize; i++) {
-            R_plus_BTPB_inv[i * controlSize + i] += 1e-8f;
+        // PB = P * B
+        matrixMultiply(P, B, PB, n, n, m);
+        
+        // ATPA = A' * PA = A'PA
+        matrixMultiply(AT, PA, ATPA, n, n, n);
+        
+        // BTPB = B' * PB = B'PB
+        matrixMultiply(BT, PB, BTPB, m, n, m);
+        
+        // BTPA = B' * PA = B'PA
+        matrixMultiply(BT, PA, BTPA, m, n, n);
+        
+        // S = R + B'PB
+        matrixAdd(R, BTPB, S, m, m);
+        
+        // Regularização para estabilidade numérica
+        for (int i = 0; i < m; i++) {
+            S[i * m + i] += 1e-8f;
         }
         
-        if (!invertMatrix(R_plus_BTPB_inv, R_plus_BTPB_inv, controlSize)) {
-            // Falha crítica na inversão
-            Serial.println(F("ITERATIVE: Falha na inversão de (R + B'PB)"));
-            break;
+        // S_inv = (R + B'PB)^{-1}
+        matrixCopy(S, S_inv, mm);
+        if (!invertMatrix(S_inv, S_inv, m)) {
+            break;  // Falha na inversão
         }
-
-        // 9. K_temp = (R + B'·P·B)^(-1) · B'·P·A
-        matrixMultiply(R_plus_BTPB_inv, BT_P_A, K_temp, controlSize, controlSize, stateSize);
-
-        // 10. Temp1 = A'·P·B · K_temp = A'·P·B·(R+B'PB)^(-1)·B'·P·A
-        // Primeiro calcular A'·P·B
-        float* AT_P_B = new float[stateSize * controlSize]();
-        matrixMultiply(AT, P_B, AT_P_B, stateSize, stateSize, controlSize);
         
-        // Temp1 = (A'·P·B) · K_temp
-        matrixMultiply(AT_P_B, K_temp, Temp1, stateSize, controlSize, stateSize);
-        delete[] AT_P_B;
-
-        // 11. P_new = Q + A'·P·A - Temp1
-        for (int i = 0; i < stateSize * stateSize; i++) {
-            P_new[i] = Q[i] + AT_P_A[i] - Temp1[i];
-        }
-
-        // 12. Forçar simetria em P_new (importante para estabilidade numérica)
-        for (int i = 0; i < stateSize; i++) {
-            for (int j = i + 1; j < stateSize; j++) {
-                float avg = (P_new[i * stateSize + j] + P_new[j * stateSize + i]) * 0.5f;
-                P_new[i * stateSize + j] = avg;
-                P_new[j * stateSize + i] = avg;
-            }
-        }
-
-        // 13. Verificar convergência (norma da diferença)
+        // K_temp = S^{-1} * B'PA
+        matrixMultiply(S_inv, BTPA, K_temp, m, m, n);
+        
+        // ATPB = A' * PB
+        matrixMultiply(AT, PB, ATPB, n, n, m);
+        
+        // correction = A'PB * K_temp = A'PB * S^{-1} * B'PA
+        matrixMultiply(ATPB, K_temp, correction, n, m, n);
+        
+        // P_new = Q + A'PA - correction
         float diff = 0.0f;
         float P_new_norm = 0.0f;
-        for (int i = 0; i < stateSize * stateSize; i++) {
+        
+        for (int i = 0; i < nn; i++) {
+            P_new[i] = Q[i] + ATPA[i] - correction[i];
             diff += fabsf(P_new[i] - P[i]);
             P_new_norm += fabsf(P_new[i]);
         }
         
-        // Convergência relativa (melhor para matrizes com valores grandes)
+        // Forçar simetria (importante!)
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                float avg = (P_new[i * n + j] + P_new[j * n + i]) * 0.5f;
+                P_new[i * n + j] = avg;
+                P_new[j * n + i] = avg;
+            }
+        }
+        
+        // Atualizar P
+        matrixCopy(P_new, P, nn);
+        
+        // Convergência relativa
         float rel_diff = (P_new_norm > 1e-10f) ? (diff / P_new_norm) : diff;
-
-        // 14. Atualiza P
-        matrixCopy(P_new, P, stateSize * stateSize);
-
-        // 15. Verificar se convergiu
+        
         if (rel_diff < tolerance) {
             converged = true;
             break;
         }
-
-        // Verificar se está divergindo
-        if (diff > last_diff * 10.0f && iter > 10) {
-            Serial.println(F("ITERATIVE: Divergindo!"));
-            break;
-        }
-        last_diff = diff;
     }
 
     // ================================================================
-    // CÁLCULO FINAL DO GANHO K
-    // K = (R + B'·P·B)^(-1) · B'·P·A
+    // CÁLCULO FINAL DO GANHO K = (R + B'PB)^{-1} * B'PA
     // ================================================================
     
-    // Recalcula com P final
-    matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
-    matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
-    matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
-    matrixAdd(R, BT_P_B, R_plus_BTPB, controlSize, controlSize);
+    // Recalcular com P final
+    matrixMultiply(P, A, PA, n, n, n);
+    matrixMultiply(P, B, PB, n, n, m);
+    matrixMultiply(BT, PB, BTPB, m, n, m);
+    matrixMultiply(BT, PA, BTPA, m, n, n);
     
-    matrixCopy(R_plus_BTPB, R_plus_BTPB_inv, controlSize * controlSize);
-    for (int i = 0; i < controlSize; i++) {
-        R_plus_BTPB_inv[i * controlSize + i] += 1e-8f;
+    matrixAdd(R, BTPB, S, m, m);
+    for (int i = 0; i < m; i++) {
+        S[i * m + i] += 1e-8f;
     }
     
-    if (!invertMatrix(R_plus_BTPB_inv, R_plus_BTPB_inv, controlSize)) {
-        converged = false;
+    matrixCopy(S, S_inv, mm);
+    if (invertMatrix(S_inv, S_inv, m)) {
+        matrixMultiply(S_inv, BTPA, K, m, m, n);
     } else {
-        matrixMultiply(R_plus_BTPB_inv, BT_P_A, K, controlSize, controlSize, stateSize);
+        converged = false;
     }
 
     unsigned long t_total = micros() - t_start;
 
-    // Print com informações
+    // Print
     if (should_print) {
         last_print_time = current_time;
-        Serial.println(F("\n========= ITERATIVE (Warm Start) ========="));
-        Serial.print(F("Dimensao: n="));
-        Serial.print(stateSize);
-        Serial.print(F(", m="));
-        Serial.println(controlSize);
-        Serial.print(F("Warm start: "));
-        Serial.println(has_warm_start ? F("SIM") : F("NAO"));
-        Serial.print(F("Iteracoes: "));
-        Serial.print(actual_iterations);
-        Serial.print(F(" / "));
-        Serial.println(maxIterations);
-        Serial.print(F("Convergiu: "));
-        Serial.println(converged ? F("SIM") : F("NAO"));
-        Serial.print(F("Tempo total: "));
-        Serial.print(t_total / 1000.0f, 3);
-        Serial.println(F(" ms"));
+        Serial.println(F("\n=== ITERATIVE (Warm Start) ==="));
+        Serial.printf("Warm start: %s\n", has_warm_start ? "SIM" : "NAO");
+        Serial.printf("Iteracoes: %d/%d\n", actual_iterations, maxIterations);
+        Serial.printf("Convergiu: %s\n", converged ? "SIM" : "NAO");
+        Serial.printf("Tempo: %.2f ms\n", t_total / 1000.0f);
         if (actual_iterations > 0) {
-            Serial.print(F("Tempo/iter: "));
-            Serial.print((t_total / (float)actual_iterations) / 1000.0f, 3);
-            Serial.println(F(" ms"));
+            Serial.printf("Tempo/iter: %.2f us\n", (float)t_total / actual_iterations);
         }
-        Serial.println(F("==========================================\n"));
+        Serial.println(F("==============================\n"));
     }
 
     // Limpeza
     delete[] P_new;
     delete[] AT;
     delete[] BT;
-    delete[] P_A;
-    delete[] AT_P_A;
-    delete[] P_B;
-    delete[] BT_P;
-    delete[] BT_P_B;
-    delete[] BT_P_A;
-    delete[] R_plus_BTPB;
-    delete[] R_plus_BTPB_inv;
+    delete[] PA;
+    delete[] PB;
+    delete[] ATPA;
+    delete[] BTPB;
+    delete[] BTPA;
+    delete[] S;
+    delete[] S_inv;
     delete[] K_temp;
-    delete[] Temp1;
+    delete[] ATPB;
+    delete[] correction;
 
     return converged;
 }
