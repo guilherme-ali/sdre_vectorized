@@ -263,7 +263,7 @@ void loop(){
     unsigned long startTime = micros();
     
     // ===== PROFILING: Tempos parciais =====
-    unsigned long t_leds, t_battery, t_wifi, t_sensor, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set;
+    unsigned long t_leds, t_battery, t_wifi, t_sensor, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set, t_prints;
     unsigned long t_checkpoint = micros();
     
     // Atualiza sistema de LEDs
@@ -398,58 +398,66 @@ void loop(){
         motors.stopAllMotors();
     }
     t_motor_set = micros() - t_checkpoint;
+    t_checkpoint = micros();
     // ==============================
 
-    unsigned long endTime = micros();
-    unsigned long executionTime = endTime - startTime;
-
-    if (executionTime > max_exectuion_time & executionTime < 50000) {
-        max_exectuion_time = executionTime;
-    }
+    // Tempo de processamento (sem prints)
+    unsigned long processingTime = micros() - startTime;
     
-    total_execution_time += executionTime;
+    total_execution_time += processingTime;
     execution_count++;
 
+    if (processingTime > max_exectuion_time && processingTime < 50000) {
+        max_exectuion_time = processingTime;
+    }
+
+    // Variáveis estáticas para armazenar valores da última impressão
+    static unsigned long last_t_prints = 0;
+    static unsigned long last_total_loop_time = 0;
+    
+    t_prints = 0; // Inicializa para loops sem print
+
     if((micros() >= prev_ms + 1000000) & true){
+        unsigned long print_start = micros();
+        
         float avg_execution_time = (execution_count > 0) ? 
                                   (float)total_execution_time / execution_count : 0;
+        
+        // Calcula tempo total do loop (processamento + prints da iteração anterior)
+        unsigned long total_loop_time = processingTime + last_t_prints;
         
         // ===== IMPRESSÃO CONSOLIDADA =====
         Serial.println("\n========== STATUS DO SISTEMA ==========");
         
         // ===== PROFILING DE DESEMPENHO =====
         Serial.println("\n⏱️  PROFILING DE EXECUÇÃO:");
-        Serial.printf("   LEDs:            %4lu μs (%5.1f%%)\n", t_leds, (t_leds * 100.0f) / executionTime);
-        Serial.printf("   Bateria:         %4lu μs (%5.1f%%)\n", t_battery, (t_battery * 100.0f) / executionTime);
-        Serial.printf("   WiFi/UDP:        %4lu μs (%5.1f%%)\n", t_wifi, (t_wifi * 100.0f) / executionTime);
-        Serial.printf("   Leitura Sensor:  %4lu μs (%5.1f%%)\n", t_sensor, (t_sensor * 100.0f) / executionTime);
-        Serial.printf("   Filtro Madgwick: %4lu μs (%5.1f%%)\n", t_filter, (t_filter * 100.0f) / executionTime);
-        Serial.printf("   Cálc. Ângulos:   %4lu μs (%5.1f%%)\n", t_angles, (t_angles * 100.0f) / executionTime);
-        Serial.printf("   Matriz Sistema:  %4lu μs (%5.1f%%)\n", t_matrix, (t_matrix * 100.0f) / executionTime);
-        Serial.printf("   LQR (Ganhos):    %4lu μs (%5.1f%%)\n", t_lqr, (t_lqr * 100.0f) / executionTime);
-        Serial.printf("   Lógica Controle: %4lu μs (%5.1f%%)\n", t_control_logic, (t_control_logic * 100.0f) / executionTime);
-        Serial.printf("   Cálc. Omega²:    %4lu μs (%5.1f%%)\n", t_motor_calc, (t_motor_calc * 100.0f) / executionTime);
-        Serial.printf("   Set Motores:     %4lu μs (%5.1f%%)\n", t_motor_set, (t_motor_set * 100.0f) / executionTime);
+        Serial.printf("   LEDs:            %4lu μs (%5.1f%%)\n", t_leds, (t_leds * 100.0f) / total_loop_time);
+        Serial.printf("   Bateria:         %4lu μs (%5.1f%%)\n", t_battery, (t_battery * 100.0f) / total_loop_time);
+        Serial.printf("   WiFi/UDP:        %4lu μs (%5.1f%%)\n", t_wifi, (t_wifi * 100.0f) / total_loop_time);
+        Serial.printf("   Leitura Sensor:  %4lu μs (%5.1f%%)\n", t_sensor, (t_sensor * 100.0f) / total_loop_time);
+        Serial.printf("   Filtro Madgwick: %4lu μs (%5.1f%%)\n", t_filter, (t_filter * 100.0f) / total_loop_time);
+        Serial.printf("   Cálc. Ângulos:   %4lu μs (%5.1f%%)\n", t_angles, (t_angles * 100.0f) / total_loop_time);
+        Serial.printf("   Matriz Sistema:  %4lu μs (%5.1f%%)\n", t_matrix, (t_matrix * 100.0f) / total_loop_time);
+        Serial.printf("   LQR (Ganhos):    %4lu μs (%5.1f%%)\n", t_lqr, (t_lqr * 100.0f) / total_loop_time);
+        Serial.printf("   Lógica Controle: %4lu μs (%5.1f%%)\n", t_control_logic, (t_control_logic * 100.0f) / total_loop_time);
+        Serial.printf("   Cálc. Omega²:    %4lu μs (%5.1f%%)\n", t_motor_calc, (t_motor_calc * 100.0f) / total_loop_time);
+        Serial.printf("   Set Motores:     %4lu μs (%5.1f%%)\n", t_motor_set, (t_motor_set * 100.0f) / total_loop_time);
+        Serial.printf("   Prints (ant.):   %4lu μs (%5.1f%%)\n", last_t_prints, (last_t_prints * 100.0f) / total_loop_time);
         Serial.println("   -----------------------------------");
         
         unsigned long sum_profiled = t_leds + t_battery + t_wifi + t_sensor + t_filter + 
                                      t_angles + t_matrix + t_lqr + t_control_logic + 
-                                     t_motor_calc + t_motor_set;
-        unsigned long overhead = executionTime - sum_profiled;
-        Serial.printf("   Soma Medida:     %4lu μs (%5.1f%%)\n", sum_profiled, (sum_profiled * 100.0f) / executionTime);
-        Serial.printf("   Overhead/Outros: %4lu μs (%5.1f%%)\n", overhead, (overhead * 100.0f) / executionTime);
+                                     t_motor_calc + t_motor_set + last_t_prints;
+        unsigned long overhead = (total_loop_time > sum_profiled) ? (total_loop_time - sum_profiled) : 0;
+        Serial.printf("   Soma Medida:     %4lu μs (%5.1f%%)\n", sum_profiled, (sum_profiled * 100.0f) / total_loop_time);
+        Serial.printf("   Overhead/Outros: %4lu μs (%5.1f%%)\n", overhead, (overhead * 100.0f) / total_loop_time);
         
         // Tempo de execução
         Serial.println("\n📊 ESTATÍSTICAS DE TEMPO:");
-        Serial.print("   Tempo_execucao: ");
-        Serial.print(executionTime);
-        Serial.println(" μs");
-        Serial.print("   Tempo_Maximo: ");
-        Serial.print(max_exectuion_time);
-        Serial.println(" μs");
-        Serial.print("   Tempo_Medio: ");
-        Serial.print(avg_execution_time);
-        Serial.println(" μs");
+        Serial.printf("   Tempo_Loop_Total: %lu μs (com prints)\n", total_loop_time);
+        Serial.printf("   Tempo_Processamento: %lu μs (sem prints)\n", processingTime);
+        Serial.printf("   Tempo_Maximo: %lu μs\n", max_exectuion_time);
+        Serial.printf("   Tempo_Medio: %.2f μs\n", avg_execution_time);
         
         // Status de controle
         if (remote_control_enabled && wifiComm.isClientConnected()) {
@@ -543,6 +551,11 @@ void loop(){
         }
 
         Serial.println("========================================\n");
+        
+        // Mede o tempo gasto nos prints
+        t_prints = micros() - print_start;
+        last_t_prints = t_prints;
+        last_total_loop_time = processingTime + t_prints;
         
         prev_ms = micros();
     }
