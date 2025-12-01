@@ -164,13 +164,6 @@ bool AutoLQR::computeGainMatrixSDA()
         return false;
     }
 
-    // Controle de frequência de print (1Hz)
-    static unsigned long last_print_time = 0;
-    unsigned long current_time = millis();
-    bool should_print = (current_time - last_print_time >= 1000);
-
-    unsigned long t_start = micros();
-
     // Alocação de memória
     float* Ak = new float[stateSize * stateSize]();
     float* Gk = new float[stateSize * stateSize]();
@@ -216,7 +209,6 @@ bool AutoLQR::computeGainMatrixSDA()
     delete[] B_Rinv;
 
     // 5. CORREÇÃO CRÍTICA: Hk = Q (não A'·Q·A + Q)
-    // Para o SDA aplicado à DARE, a inicialização correta é simplesmente Q
     matrixCopy(Q, Hk, stateSize * stateSize);
 
     // ========================================================================
@@ -225,11 +217,8 @@ bool AutoLQR::computeGainMatrixSDA()
     const int maxIterations = 5000;
     const float tolerance = 1e-9f;
     bool converged = false;
-    int actual_iterations = 0; // ← CONTADOR DE ITERAÇÕES
 
     for (int iter = 0; iter < maxIterations; iter++) {
-        actual_iterations++; // ← INCREMENTAR CONTADOR
-        
         // W = (I + Gk·Hk)^(-1)
         matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
         
@@ -310,42 +299,6 @@ bool AutoLQR::computeGainMatrixSDA()
         matrixMultiply(R_plus_BTPB, BT_P_A, K, controlSize, controlSize, stateSize);
     }
 
-    unsigned long t_total = micros() - t_start;
-
-    // ========================================================================
-    // PRINT COM NÚMERO DE ITERAÇÕES
-    // ========================================================================
-    if (should_print) {
-        last_print_time = current_time;
-        
-        Serial.println(F("\n========= SDA (Structure-preserving Doubling) ========="));
-        Serial.print(F("Dimensão: n="));
-        Serial.print(stateSize);
-        Serial.print(F(", m="));
-        Serial.println(controlSize);
-        
-        Serial.print(F("Iterações: "));
-        Serial.print(actual_iterations);
-        Serial.print(F(" / "));
-        Serial.print(maxIterations);
-        if (converged) {
-            Serial.println(F(" ✓ CONVERGIDO"));
-        } else {
-            Serial.println(F(" ✗ NÃO CONVERGIU"));
-        }
-        
-        Serial.print(F("Tempo total: "));
-        Serial.print(t_total / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("Tempo/iteração: "));
-        Serial.print((t_total / (float)actual_iterations) / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        
-        Serial.println(F("=======================================================\n"));
-    }
-
     // Limpeza
     delete[] Ak; delete[] Gk; delete[] Hk;
     delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
@@ -361,29 +314,16 @@ bool AutoLQR::computeGainMatrixSchur()
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
-    // Verifica controlabilidade
     if (!isSystemControllable()) {
         return false;
     }
 
-    // Controle de frequência de print (1Hz)
-    static unsigned long last_print_time = 0;
-    unsigned long current_time = millis();
-    bool should_print = (current_time - last_print_time >= 1000);
-    
-    // ========================================================================
-    // Medição de tempo - início
-    // ========================================================================
-    unsigned long t_start = micros();
-    
     const int n = stateSize;
     const int n2 = 2 * n;
     
     // ========================================================================
     // PASSO 1: Alocar memória para matrizes intermediárias
     // ========================================================================
-    unsigned long t_alloc_start = micros();
-    
     float* R_inv = new float[controlSize * controlSize];
     float* BT = new float[controlSize * stateSize];
     float* AT = new float[stateSize * stateSize];
@@ -391,88 +331,56 @@ bool AutoLQR::computeGainMatrixSchur()
     float* temp_state_ctrl = new float[stateSize * controlSize];
     float* G = new float[stateSize * stateSize];
     
-    unsigned long t_alloc_end = micros();
-    
     // ========================================================================
     // PASSO 2: Calcular G = B * inv(R) * B^T usando operações manuais
     // ========================================================================
-    unsigned long t_build_G_start = micros();
-    
-    // 2.1: Inverter R
     matrixCopy(R, R_inv, controlSize * controlSize);
     if (!invertMatrix(R_inv, R_inv, controlSize)) {
-        Serial.println(F("Erro: não foi possível inverter R"));
         delete[] R_inv; delete[] BT; delete[] AT;
         delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
         return false;
     }
     
-    // 2.2: Calcular B * inv(R)
     matrixMultiply(B, R_inv, temp_state_ctrl, stateSize, controlSize, controlSize);
-    
-    // 2.3: Calcular B^T
     transposeMatrix(B, BT, stateSize, controlSize);
-    
-    // 2.4: Calcular G = (B * inv(R)) * B^T
     matrixMultiply(temp_state_ctrl, BT, G, stateSize, controlSize, stateSize);
-    
-    unsigned long t_build_G = micros() - t_build_G_start;
     
     // ========================================================================
     // PASSO 3: Calcular A^T
     // ========================================================================
-    unsigned long t_build_AT_start = micros();
     transposeMatrix(A, AT, stateSize, stateSize);
-    unsigned long t_build_AT = micros() - t_build_AT_start;
     
     // ========================================================================
     // PASSO 4: Construir matrizes H e J (2n x 2n) - USANDO EIGEN
     // ========================================================================
-    unsigned long t_build_HJ_start = micros();
-    
-    // Mapear para Eigen apenas H e J (necessário para QZ)
     Eigen::MatrixXf H(n2, n2);
     Eigen::MatrixXf J(n2, n2);
     
-    // Preencher H manualmente
-    // H = [A    0]
-    //     [-Q   I]
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
-            H(i, j) = A[i * n + j];              // Bloco superior esquerdo: A
-            H(i, j + n) = 0.0f;                  // Bloco superior direito: 0
-            H(i + n, j) = -Q[i * n + j];         // Bloco inferior esquerdo: -Q
-            H(i + n, j + n) = (i == j) ? 1.0f : 0.0f;  // Bloco inferior direito: I
+            H(i, j) = A[i * n + j];
+            H(i, j + n) = 0.0f;
+            H(i + n, j) = -Q[i * n + j];
+            H(i + n, j + n) = (i == j) ? 1.0f : 0.0f;
         }
     }
     
-    // Preencher J manualmente
-    // J = [I   G]
-    //     [0  A^T]
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
-            J(i, j) = (i == j) ? 1.0f : 0.0f;    // Bloco superior esquerdo: I
-            J(i, j + n) = G[i * n + j];          // Bloco superior direito: G
-            J(i + n, j) = 0.0f;                  // Bloco inferior esquerdo: 0
-            J(i + n, j + n) = AT[i * n + j];     // Bloco inferior direito: A^T
+            J(i, j) = (i == j) ? 1.0f : 0.0f;
+            J(i, j + n) = G[i * n + j];
+            J(i + n, j) = 0.0f;
+            J(i + n, j + n) = AT[i * n + j];
         }
     }
     
-    unsigned long t_build_HJ = micros() - t_build_HJ_start;
-    
     // ========================================================================
-    // PASSO 5: Decomposição QZ OTIMIZADA
+    // PASSO 5: Decomposição QZ
     // ========================================================================
-    unsigned long t_qz_start = micros();
-    
-    // OTIMIZAÇÃO 1: Reduzir iterações máximas (trade-off precisão vs velocidade)
     Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges;
-   
-    // OTIMIZAÇÃO 2: Computar apenas se necessário
-    ges.compute(H, J, true); // true = computa autovetores (necessário para P)
+    ges.compute(H, J, true);
     
     if (ges.info() != Eigen::Success) {
-        Serial.println(F("Erro na decomposição QZ generalizada"));
         delete[] R_inv; delete[] BT; delete[] AT;
         delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
         return false;
@@ -481,13 +389,9 @@ bool AutoLQR::computeGainMatrixSchur()
     Eigen::VectorXcf alpha = ges.alphas();
     Eigen::VectorXcf beta = ges.betas();
     
-    unsigned long t_qz_decomp = micros() - t_qz_start;
-    
     // ========================================================================
     // PASSO 6: Ordenar autovetores estáveis (|λ| < 1)
     // ========================================================================
-    unsigned long t_sort_start = micros();
-    
     std::vector<int> stable_indices;
     stable_indices.reserve(n);
     
@@ -503,31 +407,21 @@ bool AutoLQR::computeGainMatrixSchur()
     }
     
     if (stable_indices.size() != static_cast<size_t>(n)) {
-        Serial.print(F("Erro: encontrados "));
-        Serial.print(stable_indices.size());
-        Serial.print(F(" autovetores estáveis, esperados "));
-        Serial.println(n);
         delete[] R_inv; delete[] BT; delete[] AT;
         delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
         return false;
     }
     
-    unsigned long t_sort_eig = micros() - t_sort_start;
-    
     // ========================================================================
     // PASSO 7: Extrair subespaço invariante estável
     // ========================================================================
-    unsigned long t_extract_start = micros();
-    
     Eigen::MatrixXcf Z = ges.eigenvectors();
     
-    // Alocar U11 e U21 como arrays C++
     float* U11_real = new float[n * n];
     float* U11_imag = new float[n * n];
     float* U21_real = new float[n * n];
     float* U21_imag = new float[n * n];
     
-    // Extrair blocos U11 e U21 (parte real e imaginária)
     for (int j = 0; j < n; j++) {
         int idx = stable_indices[j];
         for (int i = 0; i < n; i++) {
@@ -538,15 +432,9 @@ bool AutoLQR::computeGainMatrixSchur()
         }
     }
     
-    unsigned long t_extract_subspace = micros() - t_extract_start;
-    
     // ========================================================================
-    // PASSO 8: Calcular P = U21 * inv(U11) - MANUALMENTE
+    // PASSO 8: Calcular P = U21 * inv(U11)
     // ========================================================================
-    unsigned long t_calc_P_start = micros();
-    
-    // Para simplificar, vamos usar Eigen APENAS para esta inversão complexa
-    // (muito difícil fazer manualmente com números complexos)
     Eigen::MatrixXcf U11_complex(n, n);
     Eigen::MatrixXcf U21_complex(n, n);
     
@@ -559,23 +447,13 @@ bool AutoLQR::computeGainMatrixSchur()
     
     Eigen::MatrixXcf P_complex = U21_complex * U11_complex.inverse();
     
-    // Extrair parte real e verificar se a parte imaginária é desprezível
-    float max_imag = 0.0f;
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
-            float imag_part = std::abs(P_complex(i, j).imag());
-            if (imag_part > max_imag) max_imag = imag_part;
             P[i * n + j] = P_complex(i, j).real();
         }
     }
     
-    if (max_imag > 1e-6) {
-        Serial.print(F("AVISO: Parte imaginária significativa em P: "));
-        Serial.println(max_imag, 8);
-    }
-    
-    // Forçar simetria de P de forma mais robusta
-    // P deve ser simétrica por construção (solução da DARE)
+    // Forçar simetria de P
     for (int i = 0; i < n; i++) {
         for (int j = i; j < n; j++) {
             float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
@@ -584,40 +462,19 @@ bool AutoLQR::computeGainMatrixSchur()
         }
     }
     
-    // Verificar se P é definida positiva (critério de estabilidade)
-    bool is_positive_definite = true;
-    for (int i = 0; i < n && is_positive_definite; i++) {
-        if (P[i * n + i] <= 0) {
-            is_positive_definite = false;
-        }
-    }
-    
-    if (!is_positive_definite) {
-        Serial.println(F("AVISO: P não é definida positiva!"));
-    }
-    
-    unsigned long t_calc_P = micros() - t_calc_P_start;
-    
     // ========================================================================
-    // PASSO 9: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A - MANUALMENTE
+    // PASSO 9: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
     // ========================================================================
-    unsigned long t_calc_K_start = micros();
-    
-    // 9.1: Calcular B^T * P
     float* BT_P = new float[controlSize * stateSize];
     matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
     
-    // 9.2: Calcular B^T * P * B
     float* BT_P_B = new float[controlSize * controlSize];
     matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
     
-    // 9.3: Calcular R + B^T * P * B
     float* term = new float[controlSize * controlSize];
     matrixAdd(R, BT_P_B, term, controlSize, controlSize);
     
-    // 9.4: Inverter (R + B^T * P * B)
     if (!invertMatrix(term, term, controlSize)) {
-        Serial.println(F("Erro: não foi possível inverter (R + B^T*P*B)"));
         delete[] R_inv; delete[] BT; delete[] AT;
         delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
         delete[] U11_real; delete[] U11_imag; delete[] U21_real; delete[] U21_imag;
@@ -625,20 +482,14 @@ bool AutoLQR::computeGainMatrixSchur()
         return false;
     }
     
-    // 9.5: Calcular B^T * P * A
     float* BT_P_A = new float[controlSize * stateSize];
     matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
     
-    // 9.6: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
     matrixMultiply(term, BT_P_A, K, controlSize, controlSize, stateSize);
-    
-    unsigned long t_calc_K = micros() - t_calc_K_start;
-    
+
     // ========================================================================
     // Limpeza de memória
     // ========================================================================
-    unsigned long t_cleanup_start = micros();
-    
     delete[] R_inv;
     delete[] BT;
     delete[] AT;
@@ -654,252 +505,109 @@ bool AutoLQR::computeGainMatrixSchur()
     delete[] term;
     delete[] BT_P_A;
     
-    unsigned long t_cleanup = micros() - t_cleanup_start;
-    
-    // ========================================================================
-    // Tempo total
-    // ========================================================================
-    unsigned long t_total = micros() - t_start;
-    
-    // ========================================================================
-    // PRINT DETALHADO DE PERFORMANCE
-    // ========================================================================
-    if (should_print) {
-        last_print_time = current_time;
-        
-        Serial.println(F("\n========= PERFORMANCE: computeGainMatrixSchur (OTIMIZADO) ========="));
-        
-        Serial.println(F("\n--- MÉTODO DE SCHUR (QZ) COM OPERAÇÕES MANUAIS ---"));
-        Serial.print(F("Dimensão do sistema: n = "));
-        Serial.print(n);
-        Serial.print(F(", Problema aumentado: 2n = "));
-        Serial.println(n2);
-        
-        Serial.println(F("\n--- FASE 1: ALOCAÇÃO ---"));
-        Serial.print(F("1. Alocação de memória: "));
-        Serial.print((t_alloc_end - t_alloc_start) / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 2: CÁLCULO DE G (MANUAL) ---"));
-        Serial.print(F("2. G = B*inv(R)*B^T: "));
-        Serial.print(t_build_G / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 3: TRANSPOSTA DE A ---"));
-        Serial.print(F("3. A^T: "));
-        Serial.print(t_build_AT / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 4: CONSTRUÇÃO H e J ---"));
-        Serial.print(F("4. Montagem H e J (2n x 2n): "));
-        Serial.print(t_build_HJ / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 5: DECOMPOSIÇÃO QZ (CRÍTICA - EIGEN) ---"));
-        Serial.print(F("5. Eigen::GeneralizedEigenSolver: "));
-        Serial.print(t_qz_decomp / 1000.0, 3);
-        Serial.print(F(" ms ("));
-        Serial.print((t_qz_decomp / (float)t_total) * 100, 1);
-        Serial.println(F("%)"));
-        
-        Serial.println(F("\n--- FASE 6: ORDENAÇÃO ---"));
-        Serial.print(F("6. Ordenar autovalores estáveis: "));
-        Serial.print(t_sort_eig / 1000.0, 3);
-        Serial.println(F(" ms"));
-        Serial.print(F("   Autovalores estáveis: "));
-        Serial.print(stable_indices.size());
-        Serial.print(F(" / "));
-        Serial.println(n);
-        
-        Serial.println(F("\n--- FASE 7: EXTRAÇÃO ---"));
-        Serial.print(F("7. Extrair U11, U21: "));
-        Serial.print(t_extract_subspace / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 8: SOLUÇÃO P ---"));
-        Serial.print(F("8. P = U21*inv(U11): "));
-        Serial.print(t_calc_P / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 9: GANHO K (MANUAL) ---"));
-        Serial.print(F("9. K = inv(R+B^T*P*B)*B^T*P*A: "));
-        Serial.print(t_calc_K / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- FASE 10: LIMPEZA ---"));
-        Serial.print(F("10. Desalocação: "));
-        Serial.print(t_cleanup / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("\n--- RESUMO ---"));
-        Serial.print(F("TEMPO TOTAL: "));
-        Serial.print(t_total / 1000.0, 3);
-        Serial.println(F(" ms"));
-        
-        float total_ms = t_total / 1000.0;
-        float manual_ops = t_build_G + t_build_AT + t_build_HJ + t_calc_K;
-        
-        Serial.println(F("\nDistribuição:"));
-        Serial.print(F("  Operações manuais: "));
-        Serial.print((manual_ops / 1000.0 / total_ms) * 100, 1);
-        Serial.println(F("%"));
-        
-        Serial.print(F("  Decomposição QZ:   "));
-        Serial.print((t_qz_decomp / 1000.0 / total_ms) * 100, 1);
-        Serial.println(F("% (GARGALO INEVITÁVEL)"));
-        
-        Serial.print(F("  Outras operações:  "));
-        Serial.print(((t_total - manual_ops - t_qz_decomp) / 1000.0 / total_ms) * 100, 1);
-        Serial.println(F("%"));
-        
-        Serial.println(F("====================================================================\n"));
-    }
-    
     return true;
 }
+
 bool AutoLQR::computeGainMatrixVanDooren()
 {
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
-    // Verifica controlabilidade
     if (!isSystemControllable()) {
         return false;
     }
 
-    // Controle de frequência de print (1Hz)
-    static unsigned long last_print_time = 0;
-    unsigned long current_time = millis();
-    bool should_print = (current_time - last_print_time >= 1000);
-
-    unsigned long t_start = micros();
-    
     const int n = stateSize;
     const int m = controlSize;
     const int pencil_size = 2*n + m;
 
     // ========================================================================
-    // OTIMIZAÇÃO 1: Pré-alocar toda memória de uma vez (melhor cache locality)
+    // Pré-alocar toda memória de uma vez
     // ========================================================================
-    unsigned long t_alloc_start = micros();
-    
-    // Alocar memória contígua para melhor desempenho de cache
-    const int total_floats = (n*n) + (m*n) + (m*n) + (m*m) + (m*n) + (m*m);
+    const int total_floats = (n*n) + (m*n) + (m*n) + (m*m) + (m*m) + (m*n);
     float* memory_pool = new float[total_floats];
     
-    // Distribuir ponteiros no pool de memória
     float* AT = memory_pool;
     float* BT = AT + (n*n);
     float* BT_P = BT + (m*n);
     float* BT_P_B = BT_P + (m*n);
     float* term = BT_P_B + (m*m);
     float* BT_P_A = term + (m*m);
-    
-    unsigned long t_alloc_end = micros();
 
     // ========================================================================
-    // OTIMIZAÇÃO 2: Calcular transpostas manualmente (loop unrolling quando possível)
+    // Calcular transpostas
     // ========================================================================
-    unsigned long t_transpose_start = micros();
-    
-    // Transpor A (otimizado para sistemas pequenos)
     if (n == 2) {
-        // Loop unrolling para 2x2
         AT[0] = A[0]; AT[1] = A[2];
         AT[2] = A[1]; AT[3] = A[3];
     } else {
         transposeMatrix(A, AT, n, n);
     }
     
-    // Transpor B (otimizado para sistemas pequenos)
     if (n == 2 && m == 1) {
-        // Loop unrolling para 2x1
         BT[0] = B[0];
         BT[1] = B[1];
     } else {
         transposeMatrix(B, BT, n, m);
     }
-    
-    unsigned long t_transpose = micros() - t_transpose_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 3: Construir pencil usando acesso direto (evitar overhead)
+    // Construir pencil
     // ========================================================================
-    unsigned long t_build_pencil_start = micros();
-    
     Eigen::MatrixXf H(pencil_size, pencil_size);
     Eigen::MatrixXf J(pencil_size, pencil_size);
     
-    // Zerar matrizes de uma vez (mais rápido que inicialização elemento por elemento)
     H.setZero();
     J.setZero();
 
-    // Preencher H e J com loops otimizados
-    // OTIMIZAÇÃO: usar memcpy quando apropriado
-    
-    // H - Bloco (0,0): A
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             H(i, j) = A[i * n + j];
         }
     }
     
-    // H - Bloco (0,2): B
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < m; j++) {
             H(i, 2*n + j) = B[i * m + j];
         }
     }
     
-    // H - Bloco (1,0): -Q
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             H(n + i, j) = -Q[i * n + j];
         }
     }
     
-    // H - Bloco (1,1): I (identidade) - otimizado
     for (int i = 0; i < n; i++) {
         H(n + i, n + i) = 1.0f;
     }
     
-    // H - Bloco (2,2): R
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
             H(2*n + i, 2*n + j) = R[i * m + j];
         }
     }
     
-    // J - Bloco (0,0): I (identidade) - otimizado
     for (int i = 0; i < n; i++) {
         J(i, i) = 1.0f;
     }
     
-    // J - Bloco (1,1): A^T
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             J(n + i, n + j) = AT[i * n + j];
         }
     }
     
-    // J - Bloco (2,1): -B^T
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             J(2*n + i, n + j) = -BT[i * n + j];
         }
     }
-    
-    unsigned long t_build_pencil = micros() - t_build_pencil_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 4: QZ com configuração otimizada
+    // Decomposição QZ
     // ========================================================================
-    unsigned long t_qz_start = micros();
-    
     Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges;
-    
-    // CRÍTICO: O maior gargalo está aqui - não há como otimizar muito mais
-    // A decomposição QZ é O(n³) e depende de algoritmos internos da Eigen
     ges.compute(H, J, true);
     
     if (ges.info() != Eigen::Success) {
@@ -909,18 +617,13 @@ bool AutoLQR::computeGainMatrixVanDooren()
     
     Eigen::VectorXcf alpha = ges.alphas();
     Eigen::VectorXcf beta = ges.betas();
-    
-    unsigned long t_qz_decomp = micros() - t_qz_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 5: Seleção de autovalores com early termination
+    // Seleção de autovalores estáveis
     // ========================================================================
-    unsigned long t_sort_start = micros();
-    
     std::vector<int> stable_indices;
     stable_indices.reserve(n);
     
-    // Early termination: parar quando encontrar n autovalores estáveis
     const float stability_threshold = 1.0f;
     const float beta_min = 1e-10f;
     
@@ -941,52 +644,34 @@ bool AutoLQR::computeGainMatrixVanDooren()
         delete[] memory_pool;
         return false;
     }
-    
-    unsigned long t_sort_eig = micros() - t_sort_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 6: Extração otimizada do subespaço
+    // Extração do subespaço
     // ========================================================================
-    unsigned long t_extract_start = micros();
-    
     const Eigen::MatrixXcf& Z = ges.eigenvectors();
     
-    // Alocar U1 e U2 como matrizes Eigen diretamente (evita conversões)
     Eigen::MatrixXcf U1(n, n);
     Eigen::MatrixXcf U2(n, n);
     
-    // Extração otimizada usando operações vetorizadas do Eigen
     for (int j = 0; j < n; j++) {
         const int idx = stable_indices[j];
         U1.col(j) = Z.col(idx).head(n);
         U2.col(j) = Z.col(idx).segment(n, n);
     }
-    
-    unsigned long t_extract_subspace = micros() - t_extract_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 7: Cálculo de P com verificação mínima
+    // Cálculo de P
     // ========================================================================
-    unsigned long t_calc_P_start = micros();
-    
-    // Usar decomposição LU ao invés de inversão direta (mais rápido)
     Eigen::MatrixXcf P_complex = U2 * U1.inverse();
     
-    // Extrair parte real de forma otimizada
-    float max_imag = 0.0f;
-    
-    // OTIMIZAÇÃO: Loop com prefetching implícito
     for (int i = 0; i < n; i++) {
         const int row_offset = i * n;
         for (int j = 0; j < n; j++) {
-            const std::complex<float>& val = P_complex(i, j);
-            const float imag_part = std::abs(val.imag());
-            max_imag = (imag_part > max_imag) ? imag_part : max_imag;
-            P[row_offset + j] = val.real();
+            P[row_offset + j] = P_complex(i, j).real();
         }
     }
     
-    // Forçar simetria (otimizado - apenas triângulo superior)
+    // Forçar simetria
     for (int i = 0; i < n; i++) {
         const int row_i = i * n;
         for (int j = i + 1; j < n; j++) {
@@ -995,108 +680,26 @@ bool AutoLQR::computeGainMatrixVanDooren()
             P[j * n + i] = avg;
         }
     }
-    
-    unsigned long t_calc_P = micros() - t_calc_P_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 8: Cálculo de K com multiplicações em cadeia otimizadas
+    // Cálculo de K
     // ========================================================================
-    unsigned long t_calc_K_start = micros();
-    
-    // 8.1: Calcular B^T * P (reutilizar buffer pré-alocado)
     matrixMultiply(BT, P, BT_P, m, n, n);
-    
-    // 8.2: Calcular B^T * P * B (reutilizar buffer)
     matrixMultiply(BT_P, B, BT_P_B, m, n, m);
-    
-    // 8.3: Calcular R + B^T * P * B (reutilizar buffer)
     matrixAdd(R, BT_P_B, term, m, m);
     
-    // 8.4: Inverter (R + B^T * P * B)
     if (!invertMatrix(term, term, m)) {
         delete[] memory_pool;
         return false;
     }
     
-    // 8.5: Calcular B^T * P * A (reutilizar buffer)
     matrixMultiply(BT_P, A, BT_P_A, m, n, n);
-    
-    // 8.6: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
     matrixMultiply(term, BT_P_A, K, m, m, n);
-    
-    unsigned long t_calc_K = micros() - t_calc_K_start;
 
     // ========================================================================
-    // OTIMIZAÇÃO 9: Limpeza simplificada (um único delete)
+    // Limpeza
     // ========================================================================
-    unsigned long t_cleanup_start = micros();
     delete[] memory_pool;
-    unsigned long t_cleanup = micros() - t_cleanup_start;
-
-    unsigned long t_total = micros() - t_start;
-
-    // ========================================================================
-    // PRINT OTIMIZADO (apenas se necessário)
-    // ========================================================================
-    if (should_print) {
-        last_print_time = current_time;
-        
-        Serial.println(F("\n======== PERFORMANCE: VanDooren OTIMIZADO ========"));
-        Serial.print(F("Dimensão: n="));
-        Serial.print(n);
-        Serial.print(F(", m="));
-        Serial.print(m);
-        Serial.print(F(", Pencil="));
-        Serial.print(pencil_size);
-        Serial.println(F("x"));
-        
-        const float total_ms = t_total / 1000.0f;
-        
-        Serial.println(F("\n--- TEMPOS ---"));
-        Serial.print(F("1. Alocação: "));
-        Serial.print((t_alloc_end - t_alloc_start) / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("2. Transpostas: "));
-        Serial.print(t_transpose / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("3. Pencil H,J: "));
-        Serial.print(t_build_pencil / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("4. QZ (GARGALO): "));
-        Serial.print(t_qz_decomp / 1000.0f, 3);
-        Serial.print(F(" ms ("));
-        Serial.print((t_qz_decomp / 1000.0f / total_ms) * 100, 1);
-        Serial.println(F("%)"));
-        
-        Serial.print(F("5. Seleção: "));
-        Serial.print(t_sort_eig / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("6. Extração U1,U2: "));
-        Serial.print(t_extract_subspace / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("7. Calc P: "));
-        Serial.print(t_calc_P / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("8. Calc K: "));
-        Serial.print(t_calc_K / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("9. Cleanup: "));
-        Serial.print(t_cleanup / 1000.0f, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.print(F("\nTEMPO TOTAL: "));
-        Serial.print(total_ms, 3);
-        Serial.println(F(" ms"));
-        
-        Serial.println(F("==================================================\n"));
-    }
     
     return true;
 }
@@ -1232,17 +835,9 @@ float AutoLQR::calculateExpectedCost()
 bool AutoLQR::computeGainMatrixIterative()
 {
     // Método Iterativo de Riccati com Warm Start para DARE
-    // OTIMIZADO para ESP32
     
     if (!A || !B || !Q || !R || !K || !P)
         return false;
-
-    // Controle de frequência de print (1Hz)
-    static unsigned long last_print_time = 0;
-    unsigned long current_time = millis();
-    bool should_print = (current_time - last_print_time >= 1000);
-
-    unsigned long t_start = micros();
 
     // Verificar warm start
     bool has_warm_start = false;
@@ -1257,7 +852,7 @@ bool AutoLQR::computeGainMatrixIterative()
         matrixCopy(Q, P, stateSize * stateSize);
     }
 
-    // Pré-alocação de memória (uma vez só)
+    // Pré-alocação de memória
     const int n = stateSize;
     const int m = controlSize;
     const int nn = n * n;
@@ -1272,7 +867,7 @@ bool AutoLQR::computeGainMatrixIterative()
     float* ATPA = new float[nn]();
     float* BTPB = new float[mm]();
     float* BTPA = new float[m * n]();
-    float* S = new float[mm]();          // R + B'PB
+    float* S = new float[mm]();
     float* S_inv = new float[mm]();
     float* K_temp = new float[m * n]();
     float* ATPB = new float[nm]();
@@ -1282,58 +877,38 @@ bool AutoLQR::computeGainMatrixIterative()
     transposeMatrix(A, AT, n, n);
     transposeMatrix(B, BT, n, m);
 
-    const int maxIterations = 200;  // Reduzido - warm start converge rápido
+    const int maxIterations = 200;
     const float tolerance = 1e-6f;
     bool converged = false;
-    int actual_iterations = 0;
 
     for (int iter = 0; iter < maxIterations; iter++) {
-        actual_iterations++;
-
         // ================================================================
-        // ITERAÇÃO DARE OTIMIZADA
+        // ITERAÇÃO DARE
         // P_new = Q + A'PA - A'PB(R + B'PB)^{-1}B'PA
         // ================================================================
 
-        // PA = P * A
         matrixMultiply(P, A, PA, n, n, n);
-        
-        // PB = P * B
         matrixMultiply(P, B, PB, n, n, m);
-        
-        // ATPA = A' * PA = A'PA
         matrixMultiply(AT, PA, ATPA, n, n, n);
-        
-        // BTPB = B' * PB = B'PB
         matrixMultiply(BT, PB, BTPB, m, n, m);
-        
-        // BTPA = B' * PA = B'PA
         matrixMultiply(BT, PA, BTPA, m, n, n);
         
-        // S = R + B'PB
         matrixAdd(R, BTPB, S, m, m);
         
-        // Regularização para estabilidade numérica
+        // Regularização
         for (int i = 0; i < m; i++) {
             S[i * m + i] += 1e-8f;
         }
         
-        // S_inv = (R + B'PB)^{-1}
         matrixCopy(S, S_inv, mm);
         if (!invertMatrix(S_inv, S_inv, m)) {
-            break;  // Falha na inversão
+            break;
         }
         
-        // K_temp = S^{-1} * B'PA
         matrixMultiply(S_inv, BTPA, K_temp, m, m, n);
-        
-        // ATPB = A' * PB
         matrixMultiply(AT, PB, ATPB, n, n, m);
-        
-        // correction = A'PB * K_temp = A'PB * S^{-1} * B'PA
         matrixMultiply(ATPB, K_temp, correction, n, m, n);
         
-        // P_new = Q + A'PA - correction
         float diff = 0.0f;
         float P_new_norm = 0.0f;
         
@@ -1343,7 +918,7 @@ bool AutoLQR::computeGainMatrixIterative()
             P_new_norm += fabsf(P_new[i]);
         }
         
-        // Forçar simetria (importante!)
+        // Forçar simetria
         for (int i = 0; i < n; i++) {
             for (int j = i + 1; j < n; j++) {
                 float avg = (P_new[i * n + j] + P_new[j * n + i]) * 0.5f;
@@ -1352,10 +927,8 @@ bool AutoLQR::computeGainMatrixIterative()
             }
         }
         
-        // Atualizar P
         matrixCopy(P_new, P, nn);
         
-        // Convergência relativa
         float rel_diff = (P_new_norm > 1e-10f) ? (diff / P_new_norm) : diff;
         
         if (rel_diff < tolerance) {
@@ -1365,10 +938,8 @@ bool AutoLQR::computeGainMatrixIterative()
     }
 
     // ================================================================
-    // CÁLCULO FINAL DO GANHO K = (R + B'PB)^{-1} * B'PA
+    // CÁLCULO FINAL DO GANHO K
     // ================================================================
-    
-    // Recalcular com P final
     matrixMultiply(P, A, PA, n, n, n);
     matrixMultiply(P, B, PB, n, n, m);
     matrixMultiply(BT, PB, BTPB, m, n, m);
@@ -1384,22 +955,6 @@ bool AutoLQR::computeGainMatrixIterative()
         matrixMultiply(S_inv, BTPA, K, m, m, n);
     } else {
         converged = false;
-    }
-
-    unsigned long t_total = micros() - t_start;
-
-    // Print
-    if (should_print) {
-        last_print_time = current_time;
-        Serial.println(F("\n=== ITERATIVE (Warm Start) ==="));
-        Serial.printf("Warm start: %s\n", has_warm_start ? "SIM" : "NAO");
-        Serial.printf("Iteracoes: %d/%d\n", actual_iterations, maxIterations);
-        Serial.printf("Convergiu: %s\n", converged ? "SIM" : "NAO");
-        Serial.printf("Tempo: %.2f ms\n", t_total / 1000.0f);
-        if (actual_iterations > 0) {
-            Serial.printf("Tempo/iter: %.2f us\n", (float)t_total / actual_iterations);
-        }
-        Serial.println(F("==============================\n"));
     }
 
     // Limpeza
