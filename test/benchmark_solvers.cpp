@@ -117,12 +117,12 @@ namespace RiccatiBenchmark {
         lqr_iter.setInputMatrix(Bd_bench);
         lqr_iter.computeGains("ITERATIVE");
         for (int i = 0; i < NUM_ITERATIONS; i++) {
-            roll  += (random(-100, 100) / 1000.0f); 
-            pitch += (random(-100, 100) / 1000.0f);
-            yaw   += (random(-100, 100) / 1000.0f);
-            p     += (random(-100, 100) / 100.0f);
-            q     += (random(-100, 100) / 100.0f);
-            r     += (random(-100, 100) / 100.0f);
+            roll  += (random(-100, 100) / 10000.0f); 
+            pitch += (random(-100, 100) / 10000.0f);
+            yaw   += (random(-100, 100) / 10000.0f);
+            p     += (random(-100, 100) / 1000.0f);
+            q     += (random(-100, 100) / 1000.0f);
+            r     += (random(-100, 100) / 1000.0f);
             updateSystemMatrixBench(roll, pitch, yaw, p, q, r, B);
             lqr_sda.setStateMatrix(Ad_bench);
             lqr_sda.setInputMatrix(Bd_bench);

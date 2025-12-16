@@ -300,7 +300,9 @@ void loop(){
         read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
         t_sensor = micros() - t_checkpoint;
         t_checkpoint = micros();
-        filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
+        // MPU9250 retorna rad/s, Madgwick espera graus/s
+        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                      ax, ay, az, mx, my, mz);
         t_filter = micros() - t_checkpoint;
         t_checkpoint = micros();
     #else
@@ -310,7 +312,9 @@ void loop(){
         t_sensor = micros() - t_checkpoint;
         t_checkpoint = micros();
         mx = 0; my = 0; mz = 0;
-        filter.updateIMU(gx, gy, gz, ax, ay, az);
+        // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
+        filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                         ax, ay, az);
         t_filter = micros() - t_checkpoint;
         t_checkpoint = micros();
     #endif

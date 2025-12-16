@@ -215,7 +215,7 @@ bool AutoLQR::computeGainMatrixSDA()
     // LOOP SDA
     // ========================================================================
     const int maxIterations = 5000;
-    const float tolerance = 1e-9f;
+    const float tolerance = 1e-6f;
     bool converged = false;
 
     for (int iter = 0; iter < maxIterations; iter++) {
@@ -877,7 +877,7 @@ bool AutoLQR::computeGainMatrixIterative()
     transposeMatrix(A, AT, n, n);
     transposeMatrix(B, BT, n, m);
 
-    const int maxIterations = 200;
+    const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
 
