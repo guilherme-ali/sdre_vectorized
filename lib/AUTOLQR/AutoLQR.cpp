@@ -80,6 +80,12 @@ bool AutoLQR::computeGains(const char* method)
     
     if (strcmp(method, "SDA") == 0) {
         K_flag = computeGainMatrixSDA();
+    } else if (strcmp(method, "SDA_SS") == 0) {
+        K_flag = computeGainMatrixSDA_SS();
+    } else if (strcmp(method, "ASDA") == 0) {
+        K_flag = computeGainMatrixASDA();
+    } else if (strcmp(method, "SDA_SCALED") == 0) {
+        K_flag = computeGainMatrixSDA_Scaled();
     } else if (strcmp(method, "SCHUR") == 0) {
         K_flag = computeGainMatrixSchur();
     } else if (strcmp(method, "VAN_DOOREN") == 0) {
@@ -971,6 +977,557 @@ bool AutoLQR::computeGainMatrixIterative()
     delete[] K_temp;
     delete[] ATPB;
     delete[] correction;
+
+    return converged;
+}
+
+// ============================================================================
+// SDA COM SINGLE SHIFT (SDA-ss)
+// Versão melhorada do SDA com parâmetro de shift para convergência aprimorada
+// quando autovalores estão próximos de 1
+// ============================================================================
+bool AutoLQR::computeGainMatrixSDA_SS()
+{
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    const int n = stateSize;
+    const int m = controlSize;
+    const int nn = n * n;
+    const int mm = m * m;
+    const int maxIterations = 100;
+    const float tolerance = 1e-8f;
+    
+    // Parâmetro de shift - γ ótimo para DARE é tipicamente 1 para sistemas discretos
+    float gamma = 1.0f;
+    bool converged = false;
+    float prev_diff = 1e10f;
+    
+    // Alocação de memória
+    float* Ak = new float[nn]();
+    float* Gk = new float[nn]();
+    float* Hk = new float[nn]();
+    
+    float* Ak_next = new float[nn]();
+    float* Gk_next = new float[nn]();
+    float* Hk_next = new float[nn]();
+    
+    float* R_inv = new float[mm]();
+    float* BT = new float[m * n]();
+    float* AT = new float[nn]();
+    float* W = new float[nn]();
+    float* Temp1 = new float[nn]();
+    float* Temp2 = new float[nn]();
+    float* Temp3 = new float[nn]();
+    
+    // Inicialização
+    matrixCopy(A, Ak, nn);
+    transposeMatrix(A, AT, n, n);
+    transposeMatrix(B, BT, n, m);
+    
+    // Calcular R_inv
+    matrixCopy(R, R_inv, mm);
+    bool init_ok = invertMatrix(R_inv, R_inv, m);
+    
+    if (init_ok) {
+        // Gk = B * R^(-1) * B'
+        float* B_Rinv = new float[n * m];
+        matrixMultiply(B, R_inv, B_Rinv, n, m, m);
+        matrixMultiply(B_Rinv, BT, Gk, n, m, n);
+        delete[] B_Rinv;
+        
+        // Hk = Q
+        matrixCopy(Q, Hk, nn);
+        
+        // Aplicar shift inicial
+        for (int i = 0; i < nn; i++) {
+            Gk[i] *= (gamma * gamma);
+        }
+
+        // Loop SDA com shift
+        for (int iter = 0; iter < maxIterations; iter++) {
+            matrixMultiply(Gk, Hk, Temp1, n, n, n);
+            for (int i = 0; i < n; i++) {
+                Temp1[i * n + i] += 1.0f;
+            }
+            
+            matrixCopy(Temp1, W, nn);
+            if (!invertMatrix(W, W, n)) {
+                break;
+            }
+            
+            matrixMultiply(Ak, W, Temp1, n, n, n);
+            matrixMultiply(Temp1, Ak, Ak_next, n, n, n);
+            
+            transposeMatrix(Ak, AT, n, n);
+            matrixMultiply(Gk, AT, Temp2, n, n, n);
+            matrixMultiply(Temp1, Temp2, Temp3, n, n, n);
+            matrixAdd(Gk, Temp3, Gk_next, n, n);
+            
+            matrixMultiply(W, Ak, Temp2, n, n, n);
+            matrixMultiply(Hk, Temp2, Temp3, n, n, n);
+            matrixMultiply(AT, Temp3, Temp2, n, n, n);
+            matrixAdd(Hk, Temp2, Hk_next, n, n);
+            
+            float diff = 0.0f;
+            float norm_Hk = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                diff += (Hk_next[i] - Hk[i]) * (Hk_next[i] - Hk[i]);
+                norm_Hk += Hk[i] * Hk[i];
+            }
+            diff = sqrtf(diff);
+            norm_Hk = sqrtf(norm_Hk);
+            
+            float rel_diff = (norm_Hk > 1e-10f) ? (diff / norm_Hk) : diff;
+            
+            // Shift adaptativo
+            if (iter > 5 && rel_diff > 0.9f * prev_diff) {
+                gamma *= 0.95f;
+                for (int i = 0; i < nn; i++) {
+                    Gk_next[i] *= 0.9025f;
+                }
+            }
+            prev_diff = rel_diff;
+            
+            matrixCopy(Ak_next, Ak, nn);
+            matrixCopy(Gk_next, Gk, nn);
+            matrixCopy(Hk_next, Hk, nn);
+            
+            if (rel_diff < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+
+        // P = Hk
+        matrixCopy(Hk, P, nn);
+        
+        // Forçar simetria
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+                P[i * n + j] = avg;
+                P[j * n + i] = avg;
+            }
+        }
+
+        // Cálculo do ganho K
+        float* BT_P = new float[m * n];
+        float* BT_P_B = new float[mm];
+        float* BT_P_A = new float[m * n];
+        float* R_plus_BTPB = new float[mm];
+        
+        matrixMultiply(BT, P, BT_P, m, n, n);
+        matrixMultiply(BT_P, B, BT_P_B, m, n, m);
+        matrixAdd(R, BT_P_B, R_plus_BTPB, m, m);
+        
+        if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, m)) {
+            converged = false;
+        } else {
+            matrixMultiply(BT_P, A, BT_P_A, m, n, n);
+            matrixMultiply(R_plus_BTPB, BT_P_A, K, m, m, n);
+        }
+        
+        delete[] BT_P;
+        delete[] BT_P_B;
+        delete[] BT_P_A;
+        delete[] R_plus_BTPB;
+    }
+
+    delete[] Ak; delete[] Gk; delete[] Hk;
+    delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
+    delete[] R_inv; delete[] BT; delete[] AT;
+    delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+
+    return converged;
+}
+
+// ============================================================================
+// SDA ADAPTATIVO (ASDA)
+// Usa escalonamento adaptativo durante iterações para melhor estabilidade
+// ============================================================================
+bool AutoLQR::computeGainMatrixASDA()
+{
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    const int n = stateSize;
+    const int m = controlSize;
+    const int nn = n * n;
+    const int mm = m * m;
+    const int maxIterations = 100;
+    const float tolerance = 1e-8f;
+    bool converged = false;
+    
+    // Alocação de memória
+    float* Ak = new float[nn]();
+    float* Gk = new float[nn]();
+    float* Hk = new float[nn]();
+    
+    float* Ak_next = new float[nn]();
+    float* Gk_next = new float[nn]();
+    float* Hk_next = new float[nn]();
+    
+    float* R_inv = new float[mm]();
+    float* BT = new float[m * n]();
+    float* AT = new float[nn]();
+    float* W = new float[nn]();
+    float* Temp1 = new float[nn]();
+    float* Temp2 = new float[nn]();
+    float* Temp3 = new float[nn]();
+    
+    // Fatores de escalonamento adaptativo
+    float alpha_k = 1.0f;
+    float beta_k = 1.0f;
+    
+    // Inicialização ASDA
+    matrixCopy(A, Ak, nn);
+    transposeMatrix(A, AT, n, n);
+    transposeMatrix(B, BT, n, m);
+    
+    matrixCopy(R, R_inv, mm);
+    bool init_ok = invertMatrix(R_inv, R_inv, m);
+    
+    if (init_ok) {
+        float* B_Rinv = new float[n * m];
+        matrixMultiply(B, R_inv, B_Rinv, n, m, m);
+        matrixMultiply(B_Rinv, BT, Gk, n, m, n);
+        delete[] B_Rinv;
+        
+        matrixCopy(Q, Hk, nn);
+        
+        // Cálculo do escalonamento ótimo inicial
+        float norm_A = 0.0f, norm_G = 0.0f, norm_H = 0.0f;
+        for (int i = 0; i < nn; i++) {
+            norm_A += Ak[i] * Ak[i];
+            norm_G += Gk[i] * Gk[i];
+            norm_H += Hk[i] * Hk[i];
+        }
+        norm_A = sqrtf(norm_A);
+        norm_G = sqrtf(norm_G);
+        norm_H = sqrtf(norm_H);
+        
+        if (norm_A > 1e-10f) {
+            alpha_k = 1.0f / norm_A;
+        }
+        if (norm_H > 1e-10f && norm_G > 1e-10f) {
+            beta_k = sqrtf(norm_H / norm_G);
+        }
+        
+        // Aplicar escalonamento inicial
+        for (int i = 0; i < nn; i++) {
+            Gk[i] *= (beta_k * beta_k);
+        }
+
+        // Loop ASDA
+        for (int iter = 0; iter < maxIterations; iter++) {
+            // Passo 1: Calcular escalonamento adaptativo
+            float norm_Gk = 0.0f, norm_Hk = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                norm_Gk += Gk[i] * Gk[i];
+                norm_Hk += Hk[i] * Hk[i];
+            }
+            norm_Gk = sqrtf(norm_Gk);
+            norm_Hk = sqrtf(norm_Hk);
+            
+            float scale_factor = 1.0f;
+            if (norm_Gk > 1e-10f && norm_Hk > 1e-10f) {
+                scale_factor = sqrtf(norm_Hk / norm_Gk);
+                scale_factor = fminf(fmaxf(scale_factor, 0.1f), 10.0f);
+            }
+            
+            for (int i = 0; i < nn; i++) {
+                Gk[i] *= scale_factor;
+                Hk[i] /= scale_factor;
+            }
+            
+            // Passo 2: Iteração SDA padrão
+            matrixMultiply(Gk, Hk, Temp1, n, n, n);
+            for (int i = 0; i < n; i++) {
+                Temp1[i * n + i] += 1.0f;
+            }
+            
+            matrixCopy(Temp1, W, nn);
+            if (!invertMatrix(W, W, n)) {
+                break;
+            }
+            
+            matrixMultiply(Ak, W, Temp1, n, n, n);
+            matrixMultiply(Temp1, Ak, Ak_next, n, n, n);
+            
+            transposeMatrix(Ak, AT, n, n);
+            matrixMultiply(Gk, AT, Temp2, n, n, n);
+            matrixMultiply(Temp1, Temp2, Temp3, n, n, n);
+            matrixAdd(Gk, Temp3, Gk_next, n, n);
+            
+            matrixMultiply(W, Ak, Temp2, n, n, n);
+            matrixMultiply(Hk, Temp2, Temp3, n, n, n);
+            matrixMultiply(AT, Temp3, Temp2, n, n, n);
+            matrixAdd(Hk, Temp2, Hk_next, n, n);
+            
+            float diff = 0.0f;
+            float norm_H_new = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                float d = Hk_next[i] - Hk[i];
+                diff += d * d;
+                norm_H_new += Hk_next[i] * Hk_next[i];
+            }
+            diff = sqrtf(diff);
+            norm_H_new = sqrtf(norm_H_new);
+            
+            float rel_diff = (norm_H_new > 1e-10f) ? (diff / norm_H_new) : diff;
+            
+            matrixCopy(Ak_next, Ak, nn);
+            matrixCopy(Gk_next, Gk, nn);
+            matrixCopy(Hk_next, Hk, nn);
+            
+            if (rel_diff < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+
+        // P = Hk
+        matrixCopy(Hk, P, nn);
+        
+        // Forçar simetria
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+                P[i * n + j] = avg;
+                P[j * n + i] = avg;
+            }
+        }
+
+        // Cálculo do ganho K
+        float* BT_P = new float[m * n];
+        float* BT_P_B = new float[mm];
+        float* BT_P_A = new float[m * n];
+        float* R_plus_BTPB = new float[mm];
+        
+        matrixMultiply(BT, P, BT_P, m, n, n);
+        matrixMultiply(BT_P, B, BT_P_B, m, n, m);
+        matrixAdd(R, BT_P_B, R_plus_BTPB, m, m);
+        
+        if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, m)) {
+            converged = false;
+        } else {
+            matrixMultiply(BT_P, A, BT_P_A, m, n, n);
+            matrixMultiply(R_plus_BTPB, BT_P_A, K, m, m, n);
+        }
+        
+        delete[] BT_P;
+        delete[] BT_P_B;
+        delete[] BT_P_A;
+        delete[] R_plus_BTPB;
+    }
+
+    delete[] Ak; delete[] Gk; delete[] Hk;
+    delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
+    delete[] R_inv; delete[] BT; delete[] AT;
+    delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+
+    return converged;
+}
+
+// ============================================================================
+// SDA COM ESCALONAMENTO ÓTIMO (Scaled SDA)
+// Usa escalonamento ótimo do pencil Hamiltoniano para melhor condicionamento
+// ============================================================================
+bool AutoLQR::computeGainMatrixSDA_Scaled()
+{
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    const int n = stateSize;
+    const int m = controlSize;
+    const int nn = n * n;
+    const int mm = m * m;
+    const int maxIterations = 100;
+    const float tolerance = 1e-8f;
+    bool converged = false;
+    
+    // Alocação de memória
+    float* Ak = new float[nn]();
+    float* Gk = new float[nn]();
+    float* Hk = new float[nn]();
+    
+    float* Ak_next = new float[nn]();
+    float* Gk_next = new float[nn]();
+    float* Hk_next = new float[nn]();
+    
+    float* R_inv = new float[mm]();
+    float* BT = new float[m * n]();
+    float* AT = new float[nn]();
+    float* W = new float[nn]();
+    float* Temp1 = new float[nn]();
+    float* Temp2 = new float[nn]();
+    float* Temp3 = new float[nn]();
+    
+    // Matrizes de escalonamento
+    float* D = new float[n]();
+    float* Dinv = new float[n]();
+    
+    // Calcular escalonamento diagonal baseado nas normas das linhas de A
+    for (int i = 0; i < n; i++) {
+        float row_norm = 0.0f;
+        for (int j = 0; j < n; j++) {
+            row_norm += A[i * n + j] * A[i * n + j];
+        }
+        row_norm = sqrtf(row_norm);
+        D[i] = (row_norm > 1e-10f) ? (1.0f / sqrtf(row_norm)) : 1.0f;
+        Dinv[i] = 1.0f / D[i];
+    }
+    
+    // Aplicar escalonamento a A: A_scaled = D * A * D^(-1)
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            Ak[i * n + j] = D[i] * A[i * n + j] * Dinv[j];
+        }
+    }
+    
+    transposeMatrix(Ak, AT, n, n);
+    transposeMatrix(B, BT, n, m);
+    
+    // Calcular R_inv
+    matrixCopy(R, R_inv, mm);
+    bool init_ok = invertMatrix(R_inv, R_inv, m);
+    
+    if (init_ok) {
+        // Calcular G com escalonamento
+        float* B_scaled = new float[n * m];
+        float* B_Rinv = new float[n * m];
+        float* BT_scaled = new float[m * n];
+        
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < m; j++) {
+                B_scaled[i * m + j] = D[i] * B[i * m + j];
+            }
+        }
+        
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < n; j++) {
+                BT_scaled[i * n + j] = BT[i * n + j] * D[j];
+            }
+        }
+        
+        matrixMultiply(B_scaled, R_inv, B_Rinv, n, m, m);
+        matrixMultiply(B_Rinv, BT_scaled, Gk, n, m, n);
+        
+        delete[] B_scaled;
+        delete[] B_Rinv;
+        delete[] BT_scaled;
+        
+        // Q_scaled = D * Q * D
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                Hk[i * n + j] = D[i] * Q[i * n + j] * D[j];
+            }
+        }
+
+        // Loop SDA escalonado
+        for (int iter = 0; iter < maxIterations; iter++) {
+            matrixMultiply(Gk, Hk, Temp1, n, n, n);
+            for (int i = 0; i < n; i++) {
+                Temp1[i * n + i] += 1.0f;
+            }
+            
+            matrixCopy(Temp1, W, nn);
+            if (!invertMatrix(W, W, n)) {
+                break;
+            }
+            
+            matrixMultiply(Ak, W, Temp1, n, n, n);
+            matrixMultiply(Temp1, Ak, Ak_next, n, n, n);
+            
+            transposeMatrix(Ak, AT, n, n);
+            matrixMultiply(Gk, AT, Temp2, n, n, n);
+            matrixMultiply(Temp1, Temp2, Temp3, n, n, n);
+            matrixAdd(Gk, Temp3, Gk_next, n, n);
+            
+            matrixMultiply(W, Ak, Temp2, n, n, n);
+            matrixMultiply(Hk, Temp2, Temp3, n, n, n);
+            matrixMultiply(AT, Temp3, Temp2, n, n, n);
+            matrixAdd(Hk, Temp2, Hk_next, n, n);
+            
+            float diff = 0.0f;
+            float norm_H = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                float d = Hk_next[i] - Hk[i];
+                diff += d * d;
+                norm_H += Hk_next[i] * Hk_next[i];
+            }
+            diff = sqrtf(diff);
+            norm_H = sqrtf(norm_H);
+            
+            float rel_diff = (norm_H > 1e-10f) ? (diff / norm_H) : diff;
+            
+            matrixCopy(Ak_next, Ak, nn);
+            matrixCopy(Gk_next, Gk, nn);
+            matrixCopy(Hk_next, Hk, nn);
+            
+            if (rel_diff < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+
+        // Recuperar P original: P = D^(-1) * P_scaled * D^(-1)
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                P[i * n + j] = Dinv[i] * Hk[i * n + j] * Dinv[j];
+            }
+        }
+        
+        // Forçar simetria
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+                P[i * n + j] = avg;
+                P[j * n + i] = avg;
+            }
+        }
+
+        // Cálculo do ganho K
+        float* BT_P = new float[m * n];
+        float* BT_P_B = new float[mm];
+        float* BT_P_A = new float[m * n];
+        float* R_plus_BTPB = new float[mm];
+        
+        matrixMultiply(BT, P, BT_P, m, n, n);
+        matrixMultiply(BT_P, B, BT_P_B, m, n, m);
+        matrixAdd(R, BT_P_B, R_plus_BTPB, m, m);
+        
+        if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, m)) {
+            converged = false;
+        } else {
+            matrixMultiply(BT_P, A, BT_P_A, m, n, n);
+            matrixMultiply(R_plus_BTPB, BT_P_A, K, m, m, n);
+        }
+        
+        delete[] BT_P;
+        delete[] BT_P_B;
+        delete[] BT_P_A;
+        delete[] R_plus_BTPB;
+    }
+
+    delete[] Ak; delete[] Gk; delete[] Hk;
+    delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
+    delete[] R_inv; delete[] BT; delete[] AT;
+    delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+    delete[] D; delete[] Dinv;
 
     return converged;
 }

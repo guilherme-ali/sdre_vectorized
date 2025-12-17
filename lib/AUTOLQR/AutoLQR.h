@@ -168,7 +168,29 @@ private:
      * Solves DARE using basic iterative approach for simplicity
      * @return true if successful, false otherwise
      */
-    bool computeGainMatrixIterative(); 
+    bool computeGainMatrixIterative();
+    
+    /**
+     * @brief Compute the optimal gain matrix using SDA with Single Shift (SDA-ss)
+     * Enhanced SDA with shift parameter for better convergence when eigenvalues near 1
+     * Reference: "Structure-preserving algorithms for periodic discrete-time algebraic Riccati equations"
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixSDA_SS();
+    
+    /**
+     * @brief Compute the optimal gain matrix using Adaptive SDA (ASDA)
+     * Adaptive scaling during iterations for improved numerical stability
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixASDA();
+    
+    /**
+     * @brief Compute the optimal gain matrix using Scaled SDA
+     * Uses optimal scaling for better conditioning of Hamiltonian pencil
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixSDA_Scaled();
 };
 
 #endif
