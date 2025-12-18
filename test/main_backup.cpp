@@ -6,7 +6,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
+const bool DEBUG_MODE = true;
 // ==========================
 
 #include "sensor_config.h" 
@@ -96,11 +96,16 @@ AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
     Adafruit_MPU6050 mpu;
 #endif
 
+// Referência ao segundo barramento I2C para sensores adicionais (QMC5883L magnetometer)
+// SDA = GPIO40, SCL = GPIO41
+// Wire1 já é definido pela biblioteca Wire do ESP32
+extern TwoWire Wire1;
+
 Madgwick filter;
 
 // Variáveis de calibração do MPU6050
 #ifdef USE_MPU6050
-    // VALORES DE CALIBRAÇÃO - Cole aqui os valores obtidos do script de calibração
+    // VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
     float accel_offset_x = 0.058127f;  // SUBSTITUIR com valor calibrado
     float accel_offset_y = -0.148659f;  // SUBSTITUIR com valor calibrado
     float accel_offset_z = 0.018737f;  // SUBSTITUIR com valor calibrado
@@ -108,6 +113,18 @@ Madgwick filter;
     float gyro_offset_y = 0.015284f;   // SUBSTITUIR com valor calibrado
     float gyro_offset_z = 0.017474f;   // SUBSTITUIR com valor calibrado
 #endif
+
+// ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
+// Execute test/calibrate_magnetometer.cpp para obter estes valores
+// Hard-Iron Offsets (valores brutos para subtrair)
+const float MAG_OFFSET_X = 0.0f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_Y = 0.0f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_Z = 0.0f;   // SUBSTITUIR com valor calibrado
+// Soft-Iron Scales (fatores de escala)
+const float MAG_SCALE_X = 1.0f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_Y = 1.0f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_Z = 1.0f;    // SUBSTITUIR com valor calibrado
+// ===============================================
 
 // Instância do controlador de motores
 MotorControl motors;
@@ -209,6 +226,14 @@ void setup()
         start_IMU_MPU6050(mpu);
     #endif
     
+    // Inicializa o magnetômetro QMC5883L no segundo barramento I2C
+    Serial.println("Inicializando QMC5883L (Magnetômetro)...");
+    start_QMC5883L(Wire1);
+    
+    // Configura calibração do magnetômetro (valores obtidos de test/calibrate_magnetometer.cpp)
+    setQMC5883LCalibration(MAG_OFFSET_X, MAG_OFFSET_Y, MAG_OFFSET_Z,
+                           MAG_SCALE_X, MAG_SCALE_Y, MAG_SCALE_Z);
+    
     leds.setSensorsCalibration(false); // Calibração concluída
 
     // Parâmetros para discretização
@@ -262,7 +287,7 @@ void loop(){
     unsigned long startTime = micros();
     
     // ===== PROFILING: Tempos parciais =====
-    unsigned long t_leds, t_battery, t_wifi, t_sensor, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set;
+    unsigned long t_leds, t_battery, t_wifi, t_mpu, t_mag, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set;
     unsigned long t_checkpoint = micros();
     
     // Atualiza sistema de LEDs
@@ -298,7 +323,8 @@ void loop(){
     // Leitura do sensor selecionado
     #ifdef USE_MPU9250
         read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
-        t_sensor = micros() - t_checkpoint;
+        t_mpu = micros() - t_checkpoint;
+        t_mag = 0; // MPU9250 tem magnetômetro integrado
         t_checkpoint = micros();
         // MPU9250 retorna rad/s, Madgwick espera graus/s
         filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
@@ -309,12 +335,16 @@ void loop(){
         read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
                      accel_offset_x, accel_offset_y, accel_offset_z,
                      gyro_offset_x, gyro_offset_y, gyro_offset_z);
-        t_sensor = micros() - t_checkpoint;
+        t_mpu = micros() - t_checkpoint;
         t_checkpoint = micros();
-        mx = 0; my = 0; mz = 0;
+        // Lê o magnetômetro QMC5883L
+        read_QMC5883L(mx, my, mz);
+        t_mag = micros() - t_checkpoint;
+        t_checkpoint = micros();
         // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
-        filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                         ax, ay, az);
+        // Agora usando filter.update() com dados do magnetômetro QMC5883L
+        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                      ax, ay, az, mx, my, mz);
         t_filter = micros() - t_checkpoint;
         t_checkpoint = micros();
     #endif
@@ -323,7 +353,6 @@ void loop(){
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
-    yaw = 0.0f; // Zera o yaw para evitar deriva
 
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
@@ -432,7 +461,8 @@ void loop(){
             Serial.printf("   LEDs:            %4lu μs (%5.1f%%)\n", t_leds, (t_leds * 100.0f) / total_with_prints);
             Serial.printf("   Bateria:         %4lu μs (%5.1f%%)\n", t_battery, (t_battery * 100.0f) / total_with_prints);
             Serial.printf("   WiFi/UDP:        %4lu μs (%5.1f%%)\n", t_wifi, (t_wifi * 100.0f) / total_with_prints);
-            Serial.printf("   Leitura Sensor:  %4lu μs (%5.1f%%)\n", t_sensor, (t_sensor * 100.0f) / total_with_prints);
+            Serial.printf("   Leitura MPU:     %4lu μs (%5.1f%%)\n", t_mpu, (t_mpu * 100.0f) / total_with_prints);
+            Serial.printf("   Leitura Mag:     %4lu μs (%5.1f%%)\n", t_mag, (t_mag * 100.0f) / total_with_prints);
             Serial.printf("   Filtro Madgwick: %4lu μs (%5.1f%%)\n", t_filter, (t_filter * 100.0f) / total_with_prints);
             Serial.printf("   Cálc. Ângulos:   %4lu μs (%5.1f%%)\n", t_angles, (t_angles * 100.0f) / total_with_prints);
             Serial.printf("   Matriz Sistema:  %4lu μs (%5.1f%%)\n", t_matrix, (t_matrix * 100.0f) / total_with_prints);
@@ -442,7 +472,7 @@ void loop(){
             Serial.printf("   Set Motores:     %4lu μs (%5.1f%%)\n", t_motor_set, (t_motor_set * 100.0f) / total_with_prints);
             Serial.printf("   Prints (ant.):   %4lu μs (%5.1f%%)\n", last_print_time, (last_print_time * 100.0f) / total_with_prints);
             Serial.println("   -----------------------------------");
-            unsigned long sum_profiled = t_leds + t_battery + t_wifi + t_sensor + t_filter + 
+            unsigned long sum_profiled = t_leds + t_battery + t_wifi + t_mpu + t_mag + t_filter + 
                                          t_angles + t_matrix + t_lqr + t_control_logic + 
                                          t_motor_calc + t_motor_set + last_print_time;
             unsigned long overhead = (total_with_prints > sum_profiled) ? (total_with_prints - sum_profiled) : 0;
@@ -477,6 +507,16 @@ void loop(){
             // Estados do sistema
             Serial.println();
             displayStates(const_cast<float*>(z_measurement));
+            
+            // Dados do magnetômetro
+            Serial.println("\n🧭 MAGNETÔMETRO (QMC5883L):");
+            Serial.printf("   Campo Magnético: X=%+.2f  Y=%+.2f  Z=%+.2f μT\n", mx, my, mz);
+            float heading = atan2(my, mx) * RAD_TO_DEG;
+            if (heading < 0) heading += 360.0f;
+            Serial.printf("   Azimute (Heading): %.1f°\n", heading);
+            // Intensidade total do campo magnético
+            float mag_intensity = sqrt(mx*mx + my*my + mz*mz);
+            Serial.printf("   Intensidade Total: %.2f μT\n", mag_intensity);
             
             // Sinais de controle
             displayControlSignals(u, thrust);

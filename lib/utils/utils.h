@@ -19,6 +19,12 @@ void start_IMU_MPU9250(MPU9250& IMU);
 #endif
 void start_BMP(Adafruit_BMP280& bmp);
 
+// Funções do magnetômetro QMC5883L (I2C1: SDA=GPIO40, SCL=GPIO41)
+void start_QMC5883L(TwoWire& wireInstance);
+void setQMC5883LCalibration(float offset_x, float offset_y, float offset_z,
+                            float scale_x, float scale_y, float scale_z);
+void read_QMC5883L(float& mx, float& my, float& mz);
+
 // Funções de leitura de sensores
 #ifdef USE_MPU6050
     void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az, 

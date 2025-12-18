@@ -170,6 +170,121 @@ void start_BMP(Adafruit_BMP280& bmp) {
                 Adafruit_BMP280::STANDBY_MS_1);
 }
 
+// ============= FUNÇÕES DO QMC5883L (Magnetômetro) =============
+// Usa I2C1: SDA = GPIO40, SCL = GPIO41
+// Comunicação I2C direta para usar barramento alternativo
+
+#define QMC5883L_ADDR 0x0D
+
+// Registros do QMC5883L
+#define QMC5883L_REG_DATA       0x00
+#define QMC5883L_REG_STATUS     0x06
+#define QMC5883L_REG_CONTROL1   0x09
+#define QMC5883L_REG_CONTROL2   0x0A
+#define QMC5883L_REG_SET_RESET  0x0B
+
+// Ponteiro global para o barramento I2C do QMC5883L
+static TwoWire* _qmc_wire = nullptr;
+
+// Variáveis de calibração do magnetômetro (Hard-Iron e Soft-Iron)
+static float _mag_offset_x = 0.0f;
+static float _mag_offset_y = 0.0f;
+static float _mag_offset_z = 0.0f;
+static float _mag_scale_x = 1.0f;
+static float _mag_scale_y = 1.0f;
+static float _mag_scale_z = 1.0f;
+
+void setQMC5883LCalibration(float offset_x, float offset_y, float offset_z,
+                            float scale_x, float scale_y, float scale_z) {
+    _mag_offset_x = offset_x;
+    _mag_offset_y = offset_y;
+    _mag_offset_z = offset_z;
+    _mag_scale_x = scale_x;
+    _mag_scale_y = scale_y;
+    _mag_scale_z = scale_z;
+    
+    Serial.println("✅ Calibração do QMC5883L configurada:");
+    Serial.printf("   Offsets: X=%.1f, Y=%.1f, Z=%.1f\n", offset_x, offset_y, offset_z);
+    Serial.printf("   Escalas: X=%.4f, Y=%.4f, Z=%.4f\n", scale_x, scale_y, scale_z);
+}
+
+void _qmc_writeReg(uint8_t reg, uint8_t value) {
+    _qmc_wire->beginTransmission(QMC5883L_ADDR);
+    _qmc_wire->write(reg);
+    _qmc_wire->write(value);
+    _qmc_wire->endTransmission();
+}
+
+void start_QMC5883L(TwoWire& wireInstance) {
+    // Armazena referência ao barramento I2C
+    _qmc_wire = &wireInstance;
+    
+    // Inicializa o barramento I2C1 com pinos específicos
+    wireInstance.begin(40, 41); // SDA = GPIO40, SCL = GPIO41
+    wireInstance.setClock(400000); // 400kHz Fast Mode
+    
+    // Verifica se o QMC5883L está presente
+    wireInstance.beginTransmission(QMC5883L_ADDR);
+    uint8_t error = wireInstance.endTransmission();
+    
+    if (error != 0) {
+        Serial.println("❌ ERRO: QMC5883L não encontrado no endereço 0x0D!");
+        Serial.println("   Verifique conexões: SDA=GPIO40, SCL=GPIO41");
+        return;
+    }
+    
+    // Soft Reset
+    _qmc_writeReg(QMC5883L_REG_CONTROL2, 0x80);
+    delay(10);
+    
+    // Define período SET/RESET
+    _qmc_writeReg(QMC5883L_REG_SET_RESET, 0x01);
+    
+    // Configura o sensor:
+    // Modo Contínuo (0x01), ODR 200Hz (0x0C), Range 8G (0x10), OSR 512 (0x00)
+    _qmc_writeReg(QMC5883L_REG_CONTROL1, 0x01 | 0x0C | 0x10 | 0x00);
+    
+    Serial.println("✅ QMC5883L inicializado com sucesso! (I2C1: SDA=GPIO40, SCL=GPIO41)");
+    
+    delay(100); // Aguarda estabilização
+}
+
+void read_QMC5883L(float& mx, float& my, float& mz) {
+    if (_qmc_wire == nullptr) {
+        mx = my = mz = 0;
+        return;
+    }
+    
+    // Lê 6 bytes de dados (X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB)
+    _qmc_wire->beginTransmission(QMC5883L_ADDR);
+    _qmc_wire->write(QMC5883L_REG_DATA);
+    _qmc_wire->endTransmission();
+    
+    _qmc_wire->requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6);
+    
+    if (_qmc_wire->available() >= 6) {
+        int16_t x_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
+        int16_t y_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
+        int16_t z_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
+        
+        // Aplica calibração Hard-Iron (offset) e Soft-Iron (escala)
+        float x_cal = (x_raw - _mag_offset_x) * _mag_scale_x;
+        float y_cal = (y_raw - _mag_offset_y) * _mag_scale_y;
+        float z_cal = (z_raw - _mag_offset_z) * _mag_scale_z;
+        
+        // Converte para µT (microtesla)
+        // Range 8G: sensibilidade = 3000 LSB/Gauss, 1 Gauss = 100 µT
+        // Fator de conversão: valor_LSB / 3000 * 100 = valor_LSB / 30
+        const float SCALE_FACTOR = 1.0f / 30.0f;
+        
+        mx = x_cal * SCALE_FACTOR;
+        my = y_cal * SCALE_FACTOR;
+        mz = z_cal * SCALE_FACTOR;
+    } else {
+        mx = my = mz = 0;
+    }
+}
+
 // ============= FUNÇÕES DE LEITURA =============
 
 void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az, 
