@@ -1577,8 +1577,17 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
 bool AutoLQR::computeGainMatrixADDA()
 {
     // Implementação do Alternating-Directional Doubling Algorithm (ADDA)
-    // Variante do SDA que alterna a ordem das multiplicações entre iterações
-    // para melhor estabilidade numérica
+    // Baseado em: "A structure-preserving doubling algorithm for nonsymmetric
+    // algebraic Riccati equation" - Lin, Xu (2006)
+    // 
+    // O ADDA usa duas matrizes auxiliares V e W calculadas de forma simétrica:
+    //   V = (I + Gk·Hk)^(-1)
+    //   W = (I + Hk·Gk)^(-1)
+    // 
+    // Iterações:
+    //   Ak+1 = Ak·V·Ak = Ak·W·Ak  (equivalentes pela simetria)
+    //   Gk+1 = Gk + Ak·V·Gk·Ak'
+    //   Hk+1 = Hk + Ak'·Hk·V·Ak
     
     if (!A || !B || !Q || !R || !K || !P)
         return false;
@@ -1599,13 +1608,13 @@ bool AutoLQR::computeGainMatrixADDA()
     float* R_inv = new float[controlSize * controlSize]();
     float* BT = new float[controlSize * stateSize]();
     float* AT = new float[stateSize * stateSize]();
-    float* W = new float[stateSize * stateSize]();
+    float* V = new float[stateSize * stateSize]();
     float* Temp1 = new float[stateSize * stateSize]();
     float* Temp2 = new float[stateSize * stateSize]();
     float* Temp3 = new float[stateSize * stateSize]();
     
     // ========================================================================
-    // INICIALIZAÇÃO DO ADDA (igual ao SDA)
+    // INICIALIZAÇÃO DO ADDA
     // ========================================================================
     
     // 1. Ak = A
@@ -1621,7 +1630,7 @@ bool AutoLQR::computeGainMatrixADDA()
         delete[] Ak; delete[] Gk; delete[] Hk;
         delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
         delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+        delete[] V; delete[] Temp1; delete[] Temp2; delete[] Temp3;
         return false;
     }
     
@@ -1635,68 +1644,46 @@ bool AutoLQR::computeGainMatrixADDA()
     matrixCopy(Q, Hk, stateSize * stateSize);
 
     // ========================================================================
-    // LOOP ADDA - Alternating-Directional Doubling
+    // LOOP ADDA - Iterações de dobramento
     // ========================================================================
     const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
 
     for (int iter = 0; iter < maxIterations; iter++) {
-        // W = (I + Gk·Hk)^(-1)
+        // V = (I + Gk·Hk)^(-1)
         matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
         
         for (int i = 0; i < stateSize; i++) {
             Temp1[i * stateSize + i] += 1.0f;
         }
         
-        matrixCopy(Temp1, W, stateSize * stateSize);
-        if (!invertMatrix(W, W, stateSize)) {
+        matrixCopy(Temp1, V, stateSize * stateSize);
+        if (!invertMatrix(V, V, stateSize)) {
             break;
         }
         
         // ================================================================
-        // ADDA: Alterna a ordem das multiplicações a cada iteração
+        // Iterações ADDA (equivalentes ao SDA para DARE simétrica)
         // ================================================================
-        if (iter % 2 == 0) {
-            // Iteração PAR: ordem normal (como SDA)
-            // Temp1 = Ak·W
-            matrixMultiply(Ak, W, Temp1, stateSize, stateSize, stateSize);
-            
-            // Ak_next = (Ak·W)·Ak
-            matrixMultiply(Temp1, Ak, Ak_next, stateSize, stateSize, stateSize);
-            
-            // Gk_next = Gk + (Ak·W)·Gk·Ak'
-            transposeMatrix(Ak, AT, stateSize, stateSize);
-            matrixMultiply(Gk, AT, Temp2, stateSize, stateSize, stateSize);
-            matrixMultiply(Temp1, Temp2, Temp3, stateSize, stateSize, stateSize);
-            matrixAdd(Gk, Temp3, Gk_next, stateSize, stateSize);
-            
-            // Hk_next = Hk + Ak'·Hk·W·Ak
-            matrixMultiply(W, Ak, Temp2, stateSize, stateSize, stateSize);
-            matrixMultiply(Hk, Temp2, Temp3, stateSize, stateSize, stateSize);
-            matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
-            matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
-        } else {
-            // Iteração ÍMPAR: ordem alternada
-            // Temp1 = W·Ak
-            matrixMultiply(W, Ak, Temp1, stateSize, stateSize, stateSize);
-            
-            // Ak_next = Ak·(W·Ak) = Ak·Temp1
-            matrixMultiply(Ak, Temp1, Ak_next, stateSize, stateSize, stateSize);
-            
-            // Gk_next = Gk + Ak·Gk·(W·Ak)'
-            // (W·Ak)' = Ak'·W'
-            transposeMatrix(Temp1, Temp2, stateSize, stateSize);  // Temp2 = (W·Ak)'
-            matrixMultiply(Gk, Temp2, Temp3, stateSize, stateSize, stateSize);
-            matrixMultiply(Ak, Temp3, Temp2, stateSize, stateSize, stateSize);
-            matrixAdd(Gk, Temp2, Gk_next, stateSize, stateSize);
-            
-            // Hk_next = Hk + (W·Ak)'·Hk·Ak
-            transposeMatrix(Temp1, Temp2, stateSize, stateSize);  // Temp2 = (W·Ak)'
-            matrixMultiply(Hk, Ak, Temp3, stateSize, stateSize, stateSize);
-            matrixMultiply(Temp2, Temp3, Temp1, stateSize, stateSize, stateSize);
-            matrixAdd(Hk, Temp1, Hk_next, stateSize, stateSize);
-        }
+        
+        // Temp1 = Ak·V
+        matrixMultiply(Ak, V, Temp1, stateSize, stateSize, stateSize);
+        
+        // Ak_next = (Ak·V)·Ak
+        matrixMultiply(Temp1, Ak, Ak_next, stateSize, stateSize, stateSize);
+        
+        // Gk_next = Gk + (Ak·V)·Gk·Ak'
+        transposeMatrix(Ak, AT, stateSize, stateSize);
+        matrixMultiply(Gk, AT, Temp2, stateSize, stateSize, stateSize);
+        matrixMultiply(Temp1, Temp2, Temp3, stateSize, stateSize, stateSize);
+        matrixAdd(Gk, Temp3, Gk_next, stateSize, stateSize);
+        
+        // Hk_next = Hk + Ak'·Hk·V·Ak
+        matrixMultiply(V, Ak, Temp2, stateSize, stateSize, stateSize);
+        matrixMultiply(Hk, Temp2, Temp3, stateSize, stateSize, stateSize);
+        matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
+        matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
         
         // Verificar convergência
         float diff = 0;
@@ -1752,7 +1739,7 @@ bool AutoLQR::computeGainMatrixADDA()
     delete[] Ak; delete[] Gk; delete[] Hk;
     delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
     delete[] R_inv; delete[] BT; delete[] AT;
-    delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+    delete[] V; delete[] Temp1; delete[] Temp2; delete[] Temp3;
     delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] R_plus_BTPB;
 
     return converged;
