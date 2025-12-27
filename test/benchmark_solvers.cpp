@@ -203,61 +203,77 @@ namespace RiccatiBenchmark {
         double sq_sum_schur = 0, sq_sum_vd = 0, sq_sum_iter = 0;
         
         for (int i = 0; i < NUM_ITERATIONS; i++) {
-            sum_sda += times_sda[i];
-            sq_sum_sda += times_sda[i] * times_sda[i];
+            double t;
             
-            sum_sda_ss += times_sda_ss[i];
-            sq_sum_sda_ss += times_sda_ss[i] * times_sda_ss[i];
+            t = (double)times_sda[i];
+            sum_sda += t;
+            sq_sum_sda += t * t;
             
-            sum_asda += times_asda[i];
-            sq_sum_asda += times_asda[i] * times_asda[i];
+            t = (double)times_sda_ss[i];
+            sum_sda_ss += t;
+            sq_sum_sda_ss += t * t;
             
-            sum_sda_scaled += times_sda_scaled[i];
-            sq_sum_sda_scaled += times_sda_scaled[i] * times_sda_scaled[i];
+            t = (double)times_asda[i];
+            sum_asda += t;
+            sq_sum_asda += t * t;
             
-            sum_adda += times_adda[i];
-            sq_sum_adda += times_adda[i] * times_adda[i];
+            t = (double)times_sda_scaled[i];
+            sum_sda_scaled += t;
+            sq_sum_sda_scaled += t * t;
             
-            sum_schur += times_schur[i];
-            sq_sum_schur += times_schur[i] * times_schur[i];
+            t = (double)times_adda[i];
+            sum_adda += t;
+            sq_sum_adda += t * t;
             
-            sum_vd += times_vd[i];
-            sq_sum_vd += times_vd[i] * times_vd[i];
+            t = (double)times_schur[i];
+            sum_schur += t;
+            sq_sum_schur += t * t;
             
-            sum_iter += times_iter[i];
-            sq_sum_iter += times_iter[i] * times_iter[i];
+            t = (double)times_vd[i];
+            sum_vd += t;
+            sq_sum_vd += t * t;
+            
+            t = (double)times_iter[i];
+            sum_iter += t;
+            sq_sum_iter += t * t;
         }
         
+        // Função auxiliar para calcular desvio padrão de forma segura
+        auto safe_std = [](double sq_sum, double sum, int n) -> double {
+            double variance = (sq_sum / n) - (sum / n) * (sum / n);
+            return (variance > 0) ? sqrt(variance) : 0.0;
+        };
+        
         double mean_sda = sum_sda / NUM_ITERATIONS;
-        double std_sda = sqrt((sq_sum_sda / NUM_ITERATIONS) - (mean_sda * mean_sda));
+        double std_sda = safe_std(sq_sum_sda, sum_sda, NUM_ITERATIONS);
         double std_mean_sda = std_sda / sqrt(NUM_ITERATIONS);
         
         double mean_sda_ss = sum_sda_ss / NUM_ITERATIONS;
-        double std_sda_ss = sqrt((sq_sum_sda_ss / NUM_ITERATIONS) - (mean_sda_ss * mean_sda_ss));
+        double std_sda_ss = safe_std(sq_sum_sda_ss, sum_sda_ss, NUM_ITERATIONS);
         double std_mean_sda_ss = std_sda_ss / sqrt(NUM_ITERATIONS);
         
         double mean_asda = sum_asda / NUM_ITERATIONS;
-        double std_asda = sqrt((sq_sum_asda / NUM_ITERATIONS) - (mean_asda * mean_asda));
+        double std_asda = safe_std(sq_sum_asda, sum_asda, NUM_ITERATIONS);
         double std_mean_asda = std_asda / sqrt(NUM_ITERATIONS);
         
         double mean_sda_scaled = sum_sda_scaled / NUM_ITERATIONS;
-        double std_sda_scaled = sqrt((sq_sum_sda_scaled / NUM_ITERATIONS) - (mean_sda_scaled * mean_sda_scaled));
+        double std_sda_scaled = safe_std(sq_sum_sda_scaled, sum_sda_scaled, NUM_ITERATIONS);
         double std_mean_sda_scaled = std_sda_scaled / sqrt(NUM_ITERATIONS);
         
         double mean_adda = sum_adda / NUM_ITERATIONS;
-        double std_adda = sqrt((sq_sum_adda / NUM_ITERATIONS) - (mean_adda * mean_adda));
+        double std_adda = safe_std(sq_sum_adda, sum_adda, NUM_ITERATIONS);
         double std_mean_adda = std_adda / sqrt(NUM_ITERATIONS);
         
         double mean_schur = sum_schur / NUM_ITERATIONS;
-        double std_schur = sqrt((sq_sum_schur / NUM_ITERATIONS) - (mean_schur * mean_schur));
+        double std_schur = safe_std(sq_sum_schur, sum_schur, NUM_ITERATIONS);
         double std_mean_schur = std_schur / sqrt(NUM_ITERATIONS);
         
         double mean_vd = sum_vd / NUM_ITERATIONS;
-        double std_vd = sqrt((sq_sum_vd / NUM_ITERATIONS) - (mean_vd * mean_vd));
+        double std_vd = safe_std(sq_sum_vd, sum_vd, NUM_ITERATIONS);
         double std_mean_vd = std_vd / sqrt(NUM_ITERATIONS);
         
         double mean_iter = sum_iter / NUM_ITERATIONS;
-        double std_iter = sqrt((sq_sum_iter / NUM_ITERATIONS) - (mean_iter * mean_iter));
+        double std_iter = safe_std(sq_sum_iter, sum_iter, NUM_ITERATIONS);
         double std_mean_iter = std_iter / sqrt(NUM_ITERATIONS);
         
         Serial.println("\n==================== RESULTADOS DO BENCHMARK ====================");
