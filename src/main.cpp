@@ -317,6 +317,40 @@ namespace RiccatiBenchmark {
         Serial.printf("Erro RMS VAN DOOREN vs ITER:   %.6e\n", calcRMSError(K_vd));
         Serial.println("==================================================================");
         
+        // Imprimir matrizes K para SDA, ITERATIVE e ADDA
+        Serial.println("\n=============== MATRIZ K - SDA (Original) ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_sda[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - ITERATIVE ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_ref[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - ADDA ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_adda[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
         Serial.println("\nReinicie o ESP32 para rodar novamente ou desative o modo benchmark.");
         while(1) { delay(1000); }
     }
