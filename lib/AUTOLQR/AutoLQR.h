@@ -191,6 +191,16 @@ private:
      * @return true if successful, false otherwise
      */
     bool computeGainMatrixSDA_Scaled();
+    
+    /**
+     * @brief Compute the optimal gain matrix using ADDA (Alternating-Directional Doubling Algorithm)
+     * Variant of SDA that alternates multiplication order between iterations
+     * for improved numerical stability on certain problems
+     * Reference: Lin, Xu, "On the Doubling Algorithm for a (Shifted) Nonsymmetric
+     *            Algebraic Riccati Equation", 2007
+     * @return true if successful, false otherwise
+     */
+    bool computeGainMatrixADDA();
 };
 
 #endif

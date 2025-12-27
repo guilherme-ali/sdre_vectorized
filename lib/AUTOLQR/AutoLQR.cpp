@@ -92,6 +92,8 @@ bool AutoLQR::computeGains(const char* method)
         K_flag = computeGainMatrixVanDooren();
     } else if (strcmp(method, "ITERATIVE") == 0) {
         K_flag = computeGainMatrixIterative();
+    } else if (strcmp(method, "ADDA") == 0) {
+        K_flag = computeGainMatrixADDA();
     } else {
         // Método padrão: SDA
         Serial.print(F("Método desconhecido: "));
@@ -317,6 +319,9 @@ bool AutoLQR::computeGainMatrixSDA()
 
 bool AutoLQR::computeGainMatrixSchur()
 {
+    // Método de Schur para DARE usando formulação do pencil simplético
+    // Resolve: A'PA - P - A'PB(R+B'PB)^{-1}B'PA + Q = 0
+    
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
@@ -325,133 +330,173 @@ bool AutoLQR::computeGainMatrixSchur()
     }
 
     const int n = stateSize;
-    const int n2 = 2 * n;
+    const int m = controlSize;
     
     // ========================================================================
-    // PASSO 1: Alocar memória para matrizes intermediárias
+    // PASSO 1: Alocar memória
     // ========================================================================
-    float* R_inv = new float[controlSize * controlSize];
-    float* BT = new float[controlSize * stateSize];
-    float* AT = new float[stateSize * stateSize];
-    float* temp_ctrl_state = new float[controlSize * stateSize];
-    float* temp_state_ctrl = new float[stateSize * controlSize];
-    float* G = new float[stateSize * stateSize];
+    float* R_inv = new float[m * m];
+    float* BT = new float[m * n];
+    float* AT = new float[n * n];
+    float* A_inv = new float[n * n];
+    float* G = new float[n * n];
+    float* temp_nm = new float[n * m];
+    float* temp_nn = new float[n * n];
+    float* temp_nn2 = new float[n * n];
     
     // ========================================================================
-    // PASSO 2: Calcular G = B * inv(R) * B^T usando operações manuais
+    // PASSO 2: Calcular matrizes auxiliares
     // ========================================================================
-    matrixCopy(R, R_inv, controlSize * controlSize);
-    if (!invertMatrix(R_inv, R_inv, controlSize)) {
-        delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
+    // R_inv = inv(R)
+    matrixCopy(R, R_inv, m * m);
+    if (!invertMatrix(R_inv, R_inv, m)) {
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
         return false;
     }
     
-    matrixMultiply(B, R_inv, temp_state_ctrl, stateSize, controlSize, controlSize);
-    transposeMatrix(B, BT, stateSize, controlSize);
-    matrixMultiply(temp_state_ctrl, BT, G, stateSize, controlSize, stateSize);
+    // BT = B'
+    transposeMatrix(B, BT, n, m);
     
-    // ========================================================================
-    // PASSO 3: Calcular A^T
-    // ========================================================================
-    transposeMatrix(A, AT, stateSize, stateSize);
+    // AT = A'
+    transposeMatrix(A, AT, n, n);
     
-    // ========================================================================
-    // PASSO 4: Construir matrizes H e J (2n x 2n) - USANDO EIGEN
-    // ========================================================================
-    Eigen::MatrixXf H(n2, n2);
-    Eigen::MatrixXf J(n2, n2);
+    // G = B * R^{-1} * B'
+    matrixMultiply(B, R_inv, temp_nm, n, m, m);
+    matrixMultiply(temp_nm, BT, G, n, m, n);
     
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            H(i, j) = A[i * n + j];
-            H(i, j + n) = 0.0f;
-            H(i + n, j) = -Q[i * n + j];
-            H(i + n, j + n) = (i == j) ? 1.0f : 0.0f;
-        }
-    }
-    
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            J(i, j) = (i == j) ? 1.0f : 0.0f;
-            J(i, j + n) = G[i * n + j];
-            J(i + n, j) = 0.0f;
-            J(i + n, j + n) = AT[i * n + j];
-        }
-    }
-    
-    // ========================================================================
-    // PASSO 5: Decomposição QZ
-    // ========================================================================
-    Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges;
-    ges.compute(H, J, true);
-    
-    if (ges.info() != Eigen::Success) {
-        delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
+    // A_inv = inv(A)
+    matrixCopy(A, A_inv, n * n);
+    if (!invertMatrix(A_inv, A_inv, n)) {
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
         return false;
     }
     
-    Eigen::VectorXcf alpha = ges.alphas();
-    Eigen::VectorXcf beta = ges.betas();
+    // ========================================================================
+    // PASSO 3: Construir matriz Hamiltoniana simplética Z (2n x 2n)
+    // ========================================================================
+    // Para DARE, usamos a matriz simplética:
+    // Z = [A + G*A'^{-1}*Q,  -G*A'^{-1}    ]
+    //     [-A'^{-1}*Q,        A'^{-1}      ]
+    // Os autovalores estáveis de Z dão a solução
+    
+    Eigen::MatrixXf Z(2*n, 2*n);
+    
+    // Calcular A'^{-1}
+    float* AT_inv = new float[n * n];
+    matrixCopy(AT, AT_inv, n * n);
+    if (!invertMatrix(AT_inv, AT_inv, n)) {
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
+        delete[] AT_inv;
+        return false;
+    }
+    
+    // Bloco (0,0): A + G*A'^{-1}*Q
+    // temp_nn = A'^{-1} * Q
+    matrixMultiply(AT_inv, Q, temp_nn, n, n, n);
+    // temp_nn2 = G * (A'^{-1} * Q)
+    matrixMultiply(G, temp_nn, temp_nn2, n, n, n);
+    // Z(0:n, 0:n) = A + G*A'^{-1}*Q
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            Z(i, j) = A[i * n + j] + temp_nn2[i * n + j];
+        }
+    }
+    
+    // Bloco (0,n): -G*A'^{-1}
+    matrixMultiply(G, AT_inv, temp_nn, n, n, n);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            Z(i, n + j) = -temp_nn[i * n + j];
+        }
+    }
+    
+    // Bloco (n,0): -A'^{-1}*Q
+    matrixMultiply(AT_inv, Q, temp_nn, n, n, n);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            Z(n + i, j) = -temp_nn[i * n + j];
+        }
+    }
+    
+    // Bloco (n,n): A'^{-1}
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            Z(n + i, n + j) = AT_inv[i * n + j];
+        }
+    }
     
     // ========================================================================
-    // PASSO 6: Ordenar autovetores estáveis (|λ| < 1)
+    // PASSO 4: Decomposição de Schur complexa
+    // ========================================================================
+    Eigen::ComplexSchur<Eigen::MatrixXf> schur(Z);
+    
+    if (schur.info() != Eigen::Success) {
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
+        delete[] AT_inv;
+        return false;
+    }
+    
+    Eigen::MatrixXcf T = schur.matrixT();
+    Eigen::MatrixXcf U = schur.matrixU();
+    
+    // ========================================================================
+    // PASSO 5: Identificar autovalores estáveis (|λ| < 1)
     // ========================================================================
     std::vector<int> stable_indices;
     stable_indices.reserve(n);
     
-    for (int i = 0; i < n2; i++) {
-        if (std::abs(beta(i)) > 1e-10f) {
-            std::complex<float> eigenvalue = alpha(i) / beta(i);
+    for (int i = 0; i < 2*n; i++) {
+        std::complex<float> eigenvalue = T(i, i);
+        float magnitude = std::abs(eigenvalue);
+        
+        if (magnitude < 1.0f && magnitude > 1e-10f) {
+            stable_indices.push_back(i);
+        }
+    }
+    
+    // Se não encontrou n autovalores estáveis, tentar com threshold mais relaxado
+    if (stable_indices.size() < static_cast<size_t>(n)) {
+        stable_indices.clear();
+        for (int i = 0; i < 2*n; i++) {
+            std::complex<float> eigenvalue = T(i, i);
             float magnitude = std::abs(eigenvalue);
             
-            if (magnitude < 1.0f) {
+            if (magnitude < 1.0f + 1e-6f) {
                 stable_indices.push_back(i);
+                if (stable_indices.size() == static_cast<size_t>(n)) break;
             }
         }
     }
     
     if (stable_indices.size() != static_cast<size_t>(n)) {
-        delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
+        delete[] AT_inv;
         return false;
     }
     
     // ========================================================================
-    // PASSO 7: Extrair subespaço invariante estável
+    // PASSO 6: Extrair subespaço invariante estável
     // ========================================================================
-    Eigen::MatrixXcf Z = ges.eigenvectors();
-    
-    float* U11_real = new float[n * n];
-    float* U11_imag = new float[n * n];
-    float* U21_real = new float[n * n];
-    float* U21_imag = new float[n * n];
+    Eigen::MatrixXcf U11(n, n);
+    Eigen::MatrixXcf U21(n, n);
     
     for (int j = 0; j < n; j++) {
         int idx = stable_indices[j];
         for (int i = 0; i < n; i++) {
-            U11_real[i * n + j] = Z(i, idx).real();
-            U11_imag[i * n + j] = Z(i, idx).imag();
-            U21_real[i * n + j] = Z(i + n, idx).real();
-            U21_imag[i * n + j] = Z(i + n, idx).imag();
+            U11(i, j) = U(i, idx);
+            U21(i, j) = U(n + i, idx);
         }
     }
     
     // ========================================================================
-    // PASSO 8: Calcular P = U21 * inv(U11)
+    // PASSO 7: Calcular P = U21 * inv(U11)
     // ========================================================================
-    Eigen::MatrixXcf U11_complex(n, n);
-    Eigen::MatrixXcf U21_complex(n, n);
-    
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            U11_complex(i, j) = std::complex<float>(U11_real[i * n + j], U11_imag[i * n + j]);
-            U21_complex(i, j) = std::complex<float>(U21_real[i * n + j], U21_imag[i * n + j]);
-        }
-    }
-    
-    Eigen::MatrixXcf P_complex = U21_complex * U11_complex.inverse();
+    Eigen::MatrixXcf P_complex = U21 * U11.inverse();
     
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
@@ -461,7 +506,7 @@ bool AutoLQR::computeGainMatrixSchur()
     
     // Forçar simetria de P
     for (int i = 0; i < n; i++) {
-        for (int j = i; j < n; j++) {
+        for (int j = i + 1; j < n; j++) {
             float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
             P[i * n + j] = avg;
             P[j * n + i] = avg;
@@ -469,29 +514,27 @@ bool AutoLQR::computeGainMatrixSchur()
     }
     
     // ========================================================================
-    // PASSO 9: Calcular K = (R + B^T*P*B)^{-1} * B^T*P*A
+    // PASSO 8: Calcular K = (R + B'*P*B)^{-1} * B'*P*A
     // ========================================================================
-    float* BT_P = new float[controlSize * stateSize];
-    matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
+    float* BT_P = new float[m * n];
+    float* BT_P_B = new float[m * m];
+    float* BT_P_A = new float[m * n];
+    float* term = new float[m * m];
     
-    float* BT_P_B = new float[controlSize * controlSize];
-    matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
+    matrixMultiply(BT, P, BT_P, m, n, n);
+    matrixMultiply(BT_P, B, BT_P_B, m, n, m);
+    matrixAdd(R, BT_P_B, term, m, m);
     
-    float* term = new float[controlSize * controlSize];
-    matrixAdd(R, BT_P_B, term, controlSize, controlSize);
-    
-    if (!invertMatrix(term, term, controlSize)) {
-        delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] temp_ctrl_state; delete[] temp_state_ctrl; delete[] G;
-        delete[] U11_real; delete[] U11_imag; delete[] U21_real; delete[] U21_imag;
-        delete[] BT_P; delete[] BT_P_B; delete[] term;
+    if (!invertMatrix(term, term, m)) {
+        delete[] R_inv; delete[] BT; delete[] AT; delete[] A_inv;
+        delete[] G; delete[] temp_nm; delete[] temp_nn; delete[] temp_nn2;
+        delete[] AT_inv;
+        delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] term;
         return false;
     }
     
-    float* BT_P_A = new float[controlSize * stateSize];
-    matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
-    
-    matrixMultiply(term, BT_P_A, K, controlSize, controlSize, stateSize);
+    matrixMultiply(BT_P, A, BT_P_A, m, n, n);
+    matrixMultiply(term, BT_P_A, K, m, m, n);
 
     // ========================================================================
     // Limpeza de memória
@@ -499,17 +542,16 @@ bool AutoLQR::computeGainMatrixSchur()
     delete[] R_inv;
     delete[] BT;
     delete[] AT;
-    delete[] temp_ctrl_state;
-    delete[] temp_state_ctrl;
+    delete[] A_inv;
     delete[] G;
-    delete[] U11_real;
-    delete[] U11_imag;
-    delete[] U21_real;
-    delete[] U21_imag;
+    delete[] temp_nm;
+    delete[] temp_nn;
+    delete[] temp_nn2;
+    delete[] AT_inv;
     delete[] BT_P;
     delete[] BT_P_B;
-    delete[] term;
     delete[] BT_P_A;
+    delete[] term;
     
     return true;
 }
@@ -1528,6 +1570,190 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
     delete[] R_inv; delete[] BT; delete[] AT;
     delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
     delete[] D; delete[] Dinv;
+
+    return converged;
+}
+
+bool AutoLQR::computeGainMatrixADDA()
+{
+    // Implementação do Alternating-Directional Doubling Algorithm (ADDA)
+    // Variante do SDA que alterna a ordem das multiplicações entre iterações
+    // para melhor estabilidade numérica
+    
+    if (!A || !B || !Q || !R || !K || !P)
+        return false;
+
+    if (!isSystemControllable()) {
+        return false;
+    }
+
+    // Alocação de memória
+    float* Ak = new float[stateSize * stateSize]();
+    float* Gk = new float[stateSize * stateSize]();
+    float* Hk = new float[stateSize * stateSize]();
+    
+    float* Ak_next = new float[stateSize * stateSize]();
+    float* Gk_next = new float[stateSize * stateSize]();
+    float* Hk_next = new float[stateSize * stateSize]();
+    
+    float* R_inv = new float[controlSize * controlSize]();
+    float* BT = new float[controlSize * stateSize]();
+    float* AT = new float[stateSize * stateSize]();
+    float* W = new float[stateSize * stateSize]();
+    float* Temp1 = new float[stateSize * stateSize]();
+    float* Temp2 = new float[stateSize * stateSize]();
+    float* Temp3 = new float[stateSize * stateSize]();
+    
+    // ========================================================================
+    // INICIALIZAÇÃO DO ADDA (igual ao SDA)
+    // ========================================================================
+    
+    // 1. Ak = A
+    matrixCopy(A, Ak, stateSize * stateSize);
+    
+    // 2. Calcular transpostas
+    transposeMatrix(A, AT, stateSize, stateSize);
+    transposeMatrix(B, BT, stateSize, controlSize);
+    
+    // 3. Calcular R_inv
+    matrixCopy(R, R_inv, controlSize * controlSize);
+    if (!invertMatrix(R_inv, R_inv, controlSize)) {
+        delete[] Ak; delete[] Gk; delete[] Hk;
+        delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
+        delete[] R_inv; delete[] BT; delete[] AT;
+        delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+        return false;
+    }
+    
+    // 4. Gk = B * R^(-1) * B'
+    float* B_Rinv = new float[stateSize * controlSize];
+    matrixMultiply(B, R_inv, B_Rinv, stateSize, controlSize, controlSize);
+    matrixMultiply(B_Rinv, BT, Gk, stateSize, controlSize, stateSize);
+    delete[] B_Rinv;
+
+    // 5. Hk = Q
+    matrixCopy(Q, Hk, stateSize * stateSize);
+
+    // ========================================================================
+    // LOOP ADDA - Alternating-Directional Doubling
+    // ========================================================================
+    const int maxIterations = 5000;
+    const float tolerance = 1e-6f;
+    bool converged = false;
+
+    for (int iter = 0; iter < maxIterations; iter++) {
+        // W = (I + Gk·Hk)^(-1)
+        matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
+        
+        for (int i = 0; i < stateSize; i++) {
+            Temp1[i * stateSize + i] += 1.0f;
+        }
+        
+        matrixCopy(Temp1, W, stateSize * stateSize);
+        if (!invertMatrix(W, W, stateSize)) {
+            break;
+        }
+        
+        // ================================================================
+        // ADDA: Alterna a ordem das multiplicações a cada iteração
+        // ================================================================
+        if (iter % 2 == 0) {
+            // Iteração PAR: ordem normal (como SDA)
+            // Temp1 = Ak·W
+            matrixMultiply(Ak, W, Temp1, stateSize, stateSize, stateSize);
+            
+            // Ak_next = (Ak·W)·Ak
+            matrixMultiply(Temp1, Ak, Ak_next, stateSize, stateSize, stateSize);
+            
+            // Gk_next = Gk + (Ak·W)·Gk·Ak'
+            transposeMatrix(Ak, AT, stateSize, stateSize);
+            matrixMultiply(Gk, AT, Temp2, stateSize, stateSize, stateSize);
+            matrixMultiply(Temp1, Temp2, Temp3, stateSize, stateSize, stateSize);
+            matrixAdd(Gk, Temp3, Gk_next, stateSize, stateSize);
+            
+            // Hk_next = Hk + Ak'·Hk·W·Ak
+            matrixMultiply(W, Ak, Temp2, stateSize, stateSize, stateSize);
+            matrixMultiply(Hk, Temp2, Temp3, stateSize, stateSize, stateSize);
+            matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
+            matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
+        } else {
+            // Iteração ÍMPAR: ordem alternada
+            // Temp1 = W·Ak
+            matrixMultiply(W, Ak, Temp1, stateSize, stateSize, stateSize);
+            
+            // Ak_next = Ak·(W·Ak) = Ak·Temp1
+            matrixMultiply(Ak, Temp1, Ak_next, stateSize, stateSize, stateSize);
+            
+            // Gk_next = Gk + Ak·Gk·(W·Ak)'
+            // (W·Ak)' = Ak'·W'
+            transposeMatrix(Temp1, Temp2, stateSize, stateSize);  // Temp2 = (W·Ak)'
+            matrixMultiply(Gk, Temp2, Temp3, stateSize, stateSize, stateSize);
+            matrixMultiply(Ak, Temp3, Temp2, stateSize, stateSize, stateSize);
+            matrixAdd(Gk, Temp2, Gk_next, stateSize, stateSize);
+            
+            // Hk_next = Hk + (W·Ak)'·Hk·Ak
+            transposeMatrix(Temp1, Temp2, stateSize, stateSize);  // Temp2 = (W·Ak)'
+            matrixMultiply(Hk, Ak, Temp3, stateSize, stateSize, stateSize);
+            matrixMultiply(Temp2, Temp3, Temp1, stateSize, stateSize, stateSize);
+            matrixAdd(Hk, Temp1, Hk_next, stateSize, stateSize);
+        }
+        
+        // Verificar convergência
+        float diff = 0;
+        for (int i = 0; i < stateSize * stateSize; i++) {
+            diff += fabsf(Hk_next[i] - Hk[i]);
+        }
+        
+        // Atualizar
+        matrixCopy(Ak_next, Ak, stateSize * stateSize);
+        matrixCopy(Gk_next, Gk, stateSize * stateSize);
+        matrixCopy(Hk_next, Hk, stateSize * stateSize);
+        
+        if (diff < tolerance) {
+            converged = true;
+            break;
+        }
+    }
+
+    // P = Hk (solução final)
+    matrixCopy(Hk, P, stateSize * stateSize);
+
+    // ========================================================================
+    // CÁLCULO DO GANHO K
+    // ========================================================================
+    // K = (R + B'·P·B)^(-1) · B'·P·A
+    
+    float* BT_P = new float[controlSize * stateSize];
+    float* BT_P_B = new float[controlSize * controlSize];
+    float* BT_P_A = new float[controlSize * stateSize];
+    float* R_plus_BTPB = new float[controlSize * controlSize];
+    
+    // BT_P = B'·P
+    matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
+    
+    // BT_P_B = (B'·P)·B
+    matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
+    
+    // R_plus_BTPB = R + B'·P·B
+    matrixAdd(R, BT_P_B, R_plus_BTPB, controlSize, controlSize);
+    
+    // Inverter
+    if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, controlSize)) {
+        converged = false;
+    } else {
+        // BT_P_A = (B'·P)·A
+        matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
+        
+        // K = (R + B'·P·B)^(-1) · (B'·P·A)
+        matrixMultiply(R_plus_BTPB, BT_P_A, K, controlSize, controlSize, stateSize);
+    }
+
+    // Limpeza
+    delete[] Ak; delete[] Gk; delete[] Hk;
+    delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
+    delete[] R_inv; delete[] BT; delete[] AT;
+    delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+    delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] R_plus_BTPB;
 
     return converged;
 }
