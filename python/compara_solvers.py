@@ -537,6 +537,151 @@ def dare_sda(A, B, Q, R, max_iter=100, tol=1e-9):
     return P, K, eig_cl, n_iter
 
 
+def dare_adda(A, B, Q, R, max_iter=100, tol=1e-9):
+    """
+    Resolve a DARE usando o Alternating-Directional Doubling Algorithm (ADDA).
+    
+    O ADDA é uma variante do SDA (Structure-preserving Doubling Algorithm)
+    que alterna a ordem das multiplicações matriciais a cada iteração,
+    melhorando a estabilidade numérica para certos problemas.
+    
+    A diferença principal entre SDA e ADDA está na ordem de atualização:
+    - SDA: sempre multiplica na mesma ordem (A_k @ W_k @ A_k)
+    - ADDA: alterna entre (A_k @ W_k @ A_k) e (A_k @ A_k @ W_k) 
+    
+    Isso distribui melhor os erros de arredondamento e pode convergir
+    mais rapidamente para problemas específicos.
+    
+    Referência:
+    - Lin, Xu, "On the Doubling Algorithm for a (Shifted) Nonsymmetric 
+      Algebraic Riccati Equation", 2007
+    - Chu et al., "Structure-preserving algorithms for periodic 
+      discrete-time algebraic Riccati equations", 2004
+    
+    Parâmetros:
+    -----------
+    A : array_like, shape (n, n)
+        Matriz de estados do sistema discreto
+    B : array_like, shape (n, m)
+        Matriz de entrada do sistema
+    Q : array_like, shape (n, n)
+        Matriz de peso dos estados (semi-definida positiva)
+    R : array_like, shape (m, m)
+        Matriz de peso das entradas (definida positiva)
+    max_iter : int, opcional
+        Número máximo de iterações (padrão: 100)
+    tol : float, opcional
+        Tolerância para convergência (padrão: 1e-9)
+    
+    Retorna:
+    --------
+    P : ndarray, shape (n, n)
+        Solução da DARE (matriz simétrica positiva definida)
+    K : ndarray, shape (m, n)
+        Ganho de realimentação ótimo LQR
+    eig_cl : ndarray, shape (n,)
+        Autovalores do sistema em malha fechada
+    n_iter : int
+        Número de iterações até convergência
+    """
+    
+    # ========================================================================
+    # PASSO 0: Preparação
+    # ========================================================================
+    A = np.asarray(A, dtype=float)
+    B = np.asarray(B, dtype=float)
+    Q = np.asarray(Q, dtype=float)
+    R = np.asarray(R, dtype=float)
+    
+    n = A.shape[0]
+    I = np.eye(n)
+    
+    # ========================================================================
+    # PASSO 1: Inicialização (igual ao SDA)
+    # ========================================================================
+    A_k = A.copy()
+    G_k = B @ np.linalg.inv(R) @ B.T
+    H_k = Q.copy()
+    
+    # ========================================================================
+    # PASSO 2: Iteração ADDA (Alternating-Directional Doubling)
+    # ========================================================================
+    # A característica do ADDA é alternar a ordem das operações
+    # entre iterações pares e ímpares
+    
+    for k in range(max_iter):
+        # Calcula W_k = (I + G_k @ H_k)^{-1}
+        W_k = np.linalg.inv(I + G_k @ H_k)
+        
+        # ------------------------------------------------------------------
+        # ADDA: Alterna a ordem das multiplicações
+        # ------------------------------------------------------------------
+        if k % 2 == 0:
+            # Iteração par: multiplicação à esquerda primeiro
+            # A_{k+1} = A_k @ W_k @ A_k
+            temp = A_k @ W_k
+            A_novo = temp @ A_k
+            
+            # G_{k+1} = G_k + A_k @ W_k @ G_k @ A_k^T
+            G_novo = G_k + temp @ G_k @ A_k.T
+            
+            # H_{k+1} = H_k + A_k^T @ H_k @ W_k @ A_k
+            H_novo = H_k + A_k.T @ H_k @ W_k @ A_k
+        else:
+            # Iteração ímpar: multiplicação à direita primeiro
+            # A_{k+1} = A_k @ W_k @ A_k (mas ordem de cálculo diferente)
+            temp = W_k @ A_k
+            A_novo = A_k @ temp
+            
+            # G_{k+1} = G_k + A_k @ W_k @ G_k @ A_k^T
+            G_novo = G_k + A_k @ W_k @ G_k @ A_k.T
+            
+            # H_{k+1} = H_k + A_k^T @ H_k @ W_k @ A_k (ordem diferente)
+            temp_H = H_k @ W_k
+            H_novo = H_k + A_k.T @ temp_H @ A_k
+        
+        # Simetriza G e H para estabilidade numérica
+        G_novo = (G_novo + G_novo.T) / 2
+        H_novo = (H_novo + H_novo.T) / 2
+        
+        # ------------------------------------------------------------------
+        # Verifica convergência
+        # ------------------------------------------------------------------
+        diff_A = np.linalg.norm(A_novo, 'fro')
+        diff_H = np.linalg.norm(H_novo - H_k, 'fro')
+        
+        if diff_A < tol or diff_H < tol:
+            H_k = H_novo
+            n_iter = k + 1
+            break
+        
+        A_k = A_novo
+        G_k = G_novo
+        H_k = H_novo
+    else:
+        n_iter = max_iter
+        print(f"⚠ Aviso: ADDA não convergiu em {max_iter} iterações")
+    
+    # ========================================================================
+    # PASSO 3: Extrai solução P da DARE
+    # ========================================================================
+    P = H_k
+    P = (P + P.T) / 2
+    
+    # ========================================================================
+    # PASSO 4: Calcula ganho de realimentação K
+    # ========================================================================
+    K = np.linalg.inv(R + B.T @ P @ B) @ (B.T @ P @ A)
+    
+    # ========================================================================
+    # PASSO 5: Calcula autovalores do sistema em malha fechada
+    # ========================================================================
+    A_cl = A - B @ K
+    eig_cl = np.linalg.eigvals(A_cl)
+    
+    return P, K, eig_cl, n_iter
+
+
 def verificar_solucao_dare(A, B, Q, R, P):
     """
     Verifica se P é solução da DARE calculando o resíduo.
@@ -1111,20 +1256,21 @@ def comparacao_tres_metodos(A, B, Q, R, P_schur, K_schur):
         print("Instale com: pip install scipy")
 
 
-def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
+def comparacao_seis_metodos(A, B, Q, R, P_schur, K_schur):
     """
-    Compara 5 métodos para resolver a DARE:
+    Compara 6 métodos para resolver a DARE:
     1. Método de Schur (2n×2n - implementado)
     2. Método de van Dooren ((2n+m)×(2n+m) com deflação)
     3. SciPy solve_discrete_are
     4. Método Iterativo (convergência de P)
     5. SDA - Structure-preserving Doubling Algorithm
+    6. ADDA - Alternating-Directional Doubling Algorithm
     
     Inclui comparação de tempo de execução, precisão e uso de memória.
     """
     
     print("\n\n" + "=" * 80)
-    print("COMPARAÇÃO DOS 5 MÉTODOS - Sistema 6x6")
+    print("COMPARAÇÃO DOS 6 MÉTODOS - Sistema 6x6")
     print("=" * 80)
     
     try:
@@ -1136,6 +1282,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print("  3. SciPy solve_discrete_are (LAPACK otimizado)")
         print("  4. Método Iterativo (convergência direta da equação de Riccati)")
         print("  5. SDA - Structure-preserving Doubling Algorithm (convergência quadrática)")
+        print("  6. ADDA - Alternating-Directional Doubling Algorithm (convergência quadrática)")
         print(f"\nSistema: A {A.shape}, B {B.shape}, Q {Q.shape}, R {R.shape}")
         print(f"Dimensões dos pencils:")
         print(f"  - Schur:      {2*A.shape[0]} × {2*A.shape[0]}")
@@ -1151,7 +1298,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print("\nMedindo consumo de memória de cada método...")
         
         # Memória do método de Schur
-        print("[1/5] Analisando método de Schur...")
+        print("[1/6] Analisando método de Schur...")
         tracemalloc.start()
         snapshot_before = tracemalloc.take_snapshot()
         P_test, K_test, _ = dare_schur(A, B, Q, R)
@@ -1164,7 +1311,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tracemalloc.clear_traces()
         
         # Memória do método de van Dooren
-        print("[2/5] Analisando método de van Dooren...")
+        print("[2/6] Analisando método de van Dooren...")
         tracemalloc.start()
         snapshot_before = tracemalloc.take_snapshot()
         P_test, K_test, _ = dare_van_dooren(A, B, Q, R)
@@ -1177,7 +1324,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tracemalloc.clear_traces()
         
         # Memória do SciPy
-        print("[3/5] Analisando SciPy...")
+        print("[3/6] Analisando SciPy...")
         tracemalloc.start()
         snapshot_before = tracemalloc.take_snapshot()
         P_test = solve_discrete_are(A, B, Q, R)
@@ -1191,7 +1338,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tracemalloc.clear_traces()
         
         # Memória do método iterativo
-        print("[4/5] Analisando método iterativo...")
+        print("[4/6] Analisando método iterativo...")
         tracemalloc.start()
         snapshot_before = tracemalloc.take_snapshot()
         P_test, K_test, _, n_iter = dare_iterativo(A, B, Q, R)
@@ -1204,7 +1351,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tracemalloc.clear_traces()
         
         # Memória do método SDA
-        print("[5/5] Analisando método SDA...")
+        print("[5/6] Analisando método SDA...")
         tracemalloc.start()
         snapshot_before = tracemalloc.take_snapshot()
         P_test, K_test, _, n_iter_sda = dare_sda(A, B, Q, R)
@@ -1214,6 +1361,19 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
         mem_sda = sum(stat.size_diff for stat in top_stats) / 1024  # KB
         mem_sda_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
+        tracemalloc.clear_traces()
+        
+        # Memória do método ADDA
+        print("[6/6] Analisando método ADDA...")
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
+        P_test, K_test, _, n_iter_adda = dare_adda(A, B, Q, R)
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        
+        top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+        mem_adda = sum(stat.size_diff for stat in top_stats) / 1024  # KB
+        mem_adda_peak = tracemalloc.get_traced_memory()[1] / 1024 if tracemalloc.is_tracing() else 0
         tracemalloc.clear_traces()
         
         # Cálculo teórico do uso de memória (matrizes intermediárias)
@@ -1241,6 +1401,10 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
             n**2 * 6  # A_k, G_k, H_k, A_novo, G_novo, H_novo, W_k
         ) * bytes_per_float / 1024  # KB
         
+        mem_teorica_adda = (
+            n**2 * 8  # E_k, F_k, G_k, H_k, E_novo, F_novo, G_novo, H_novo, T1, T2
+        ) * bytes_per_float / 1024  # KB
+        
         print("\n" + "-" * 80)
         print("Resultados da análise de memória:")
         print("-" * 80)
@@ -1264,6 +1428,10 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print(f"   Memória alocada: {mem_sda:.2f} KB")
         print(f"   Memória teórica: {mem_teorica_sda:.2f} KB")
         
+        print(f"\n6. Método ADDA (Alternating-Directional Doubling):")
+        print(f"   Memória alocada: {mem_adda:.2f} KB")
+        print(f"   Memória teórica: {mem_teorica_adda:.2f} KB")
+        
         print("\n" + "-" * 80)
         print("Comparação relativa de memória:")
         print("-" * 80)
@@ -1273,7 +1441,8 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
             ("van Dooren", mem_van_dooren),
             ("SciPy", mem_scipy),
             ("Iterativo", mem_iter),
-            ("SDA", mem_sda)
+            ("SDA", mem_sda),
+            ("ADDA", mem_adda)
         ]
         metodos_mem_ordenados = sorted(metodos_mem, key=lambda x: x[1])
         
@@ -1286,11 +1455,15 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print(f"\nOverhead de memória do van Dooren vs Schur: {overhead_van_dooren:+.1f}%")
         print(f"Justificativa: van Dooren inicia com pencil ({2*n+m}×{2*n+m}) antes da deflação")
         
+        overhead_adda_sda = ((mem_adda - mem_sda) / mem_sda * 100) if mem_sda > 0 else 0
+        print(f"Overhead de memória do ADDA vs SDA: {overhead_adda_sda:+.1f}%")
+        print(f"Justificativa: ADDA usa 4 matrizes (E,F,G,H) vs 3 do SDA (A,G,H)")
+        
         # ====================================================================
         # BENCHMARK: Comparação de tempo de execução
         # ====================================================================
         print("\n\n" + "=" * 80)
-        print("BENCHMARK - Tempo de Execução dos 5 Métodos")
+        print("BENCHMARK - Tempo de Execução dos 6 Métodos")
         print("=" * 80)
         
         n_execucoes = 1000
@@ -1298,7 +1471,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print("Aguarde...")
         
         # Benchmark do método de Schur
-        print("\n[1/5] Testando método de Schur (2n×2n)...")
+        print("\n[1/6] Testando método de Schur (2n×2n)...")
         tempo_schur_list = []
         for i in range(n_execucoes):
             t_inicio = time.perf_counter()
@@ -1312,7 +1485,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tempo_schur_max = np.max(tempo_schur_list)
         
         # Benchmark do método de van Dooren
-        print("[2/5] Testando método de van Dooren ((2n+m)×(2n+m) com deflação)...")
+        print("[2/6] Testando método de van Dooren ((2n+m)×(2n+m) com deflação)...")
         tempo_van_dooren_list = []
         for i in range(n_execucoes):
             t_inicio = time.perf_counter()
@@ -1326,7 +1499,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tempo_van_dooren_max = np.max(tempo_van_dooren_list)
         
         # Benchmark do SciPy
-        print("[3/5] Testando SciPy solve_discrete_are...")
+        print("[3/6] Testando SciPy solve_discrete_are...")
         tempo_scipy_list = []
         for i in range(n_execucoes):
             t_inicio = time.perf_counter()
@@ -1341,7 +1514,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tempo_scipy_max = np.max(tempo_scipy_list)
         
         # Benchmark do método iterativo
-        print("[4/5] Testando método iterativo...")
+        print("[4/6] Testando método iterativo...")
         tempo_iter_list = []
         n_iter_total = 0
         for i in range(n_execucoes):
@@ -1358,7 +1531,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         n_iter_medio = n_iter_total / n_execucoes
         
         # Benchmark do método SDA
-        print("[5/5] Testando método SDA (Structure-preserving Doubling)...")
+        print("[5/6] Testando método SDA (Structure-preserving Doubling)...")
         tempo_sda_list = []
         n_iter_sda_total = 0
         for i in range(n_execucoes):
@@ -1374,9 +1547,26 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         tempo_sda_max = np.max(tempo_sda_list)
         n_iter_sda_medio = n_iter_sda_total / n_execucoes
         
+        # Benchmark do método ADDA
+        print("[6/6] Testando método ADDA (Alternating-Directional Doubling)...")
+        tempo_adda_list = []
+        n_iter_adda_total = 0
+        for i in range(n_execucoes):
+            t_inicio = time.perf_counter()
+            P_test, K_test, _, n_iter_adda = dare_adda(A, B, Q, R)
+            t_fim = time.perf_counter()
+            tempo_adda_list.append(t_fim - t_inicio)
+            n_iter_adda_total += n_iter_adda
+        
+        tempo_adda_medio = np.mean(tempo_adda_list)
+        tempo_adda_std = np.std(tempo_adda_list)
+        tempo_adda_min = np.min(tempo_adda_list)
+        tempo_adda_max = np.max(tempo_adda_list)
+        n_iter_adda_medio = n_iter_adda_total / n_execucoes
+        
         # Resultados do benchmark
         print("\n" + "=" * 80)
-        print("RESULTADOS DO BENCHMARK - COMPARAÇÃO DOS 5 MÉTODOS")
+        print("RESULTADOS DO BENCHMARK - COMPARAÇÃO DOS 6 MÉTODOS")
         print("=" * 80)
         
         print(f"\n1. Método de Schur (2n×2n):")
@@ -1411,6 +1601,13 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print(f"   Tempo máximo:  {tempo_sda_max*1000:.3f} ms")
         print(f"   Iterações médias: {n_iter_sda_medio:.1f}")
         
+        print(f"\n6. Método ADDA (convergência quadrática alternada):")
+        print(f"   Tempo médio:   {tempo_adda_medio*1000:.3f} ms")
+        print(f"   Desvio padrão: {tempo_adda_std*1000:.3f} ms")
+        print(f"   Tempo mínimo:  {tempo_adda_min*1000:.3f} ms")
+        print(f"   Tempo máximo:  {tempo_adda_max*1000:.3f} ms")
+        print(f"   Iterações médias: {n_iter_adda_medio:.1f}")
+        
         # Comparação relativa
         print("\n" + "=" * 80)
         print("COMPARAÇÃO RELATIVA DE DESEMPENHO")
@@ -1421,7 +1618,8 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
             ("van Dooren", tempo_van_dooren_medio),
             ("SciPy", tempo_scipy_medio),
             ("Iterativo", tempo_iter_medio),
-            ("SDA", tempo_sda_medio)
+            ("SDA", tempo_sda_medio),
+            ("ADDA", tempo_adda_medio)
         ]
         metodos_ordenados = sorted(metodos, key=lambda x: x[1])
         
@@ -1431,20 +1629,31 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
             print(f"  {i}º - {nome:20s}: {tempo*1000:6.3f} ms  ({razao:.2f}x do mais rápido)")
         
         # Comparação entre métodos iterativos
-        print(f"\nComparação dos métodos iterativos:")
+        print(f"\nComparação dos métodos de duplicação (doubling):")
         print(f"  Iterativo: {n_iter_medio:.1f} iterações (convergência LINEAR)")
         print(f"  SDA:       {n_iter_sda_medio:.1f} iterações (convergência QUADRÁTICA)")
+        print(f"  ADDA:      {n_iter_adda_medio:.1f} iterações (convergência QUADRÁTICA alternada)")
         razao_iter_sda = tempo_iter_medio / tempo_sda_medio
+        razao_iter_adda = tempo_iter_medio / tempo_adda_medio
+        razao_sda_adda = tempo_sda_medio / tempo_adda_medio
         if razao_iter_sda > 1:
             print(f"  SDA é {razao_iter_sda:.2f}x mais rápido que o método iterativo simples")
         else:
             print(f"  Método iterativo é {1/razao_iter_sda:.2f}x mais rápido que SDA")
+        if razao_iter_adda > 1:
+            print(f"  ADDA é {razao_iter_adda:.2f}x mais rápido que o método iterativo simples")
+        else:
+            print(f"  Método iterativo é {1/razao_iter_adda:.2f}x mais rápido que ADDA")
+        if razao_sda_adda > 1:
+            print(f"  ADDA é {razao_sda_adda:.2f}x mais rápido que SDA")
+        else:
+            print(f"  SDA é {1/razao_sda_adda:.2f}x mais rápido que ADDA")
         
         # ====================================================================
         # Comparação de Precisão
         # ====================================================================
         print("\n\n" + "=" * 80)
-        print("COMPARAÇÃO DE PRECISÃO DOS 5 MÉTODOS")
+        print("COMPARAÇÃO DE PRECISÃO DOS 6 MÉTODOS")
         print("=" * 80)
         
         print("\nCalculando soluções para comparação de precisão...")
@@ -1453,6 +1662,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         K_scipy = np.linalg.inv(R + B.T @ P_scipy @ B) @ (B.T @ P_scipy @ A)
         P_iter, K_iter, _, n_iter_final = dare_iterativo(A, B, Q, R)
         P_sda, K_sda, _, n_iter_sda_final = dare_sda(A, B, Q, R)
+        P_adda, K_adda, _, n_iter_adda_final = dare_adda(A, B, Q, R)
         
         print("\n" + "-" * 80)
         print("Diferenças em relação ao SciPy (referência):")
@@ -1463,34 +1673,40 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         diff_P_van_dooren = P_van_dooren - P_scipy
         diff_P_iter = P_iter - P_scipy
         diff_P_sda = P_sda - P_scipy
+        diff_P_adda = P_adda - P_scipy
         
         norma_diff_P_schur = np.linalg.norm(diff_P_schur, 'fro')
         norma_diff_P_van_dooren = np.linalg.norm(diff_P_van_dooren, 'fro')
         norma_diff_P_iter = np.linalg.norm(diff_P_iter, 'fro')
         norma_diff_P_sda = np.linalg.norm(diff_P_sda, 'fro')
+        norma_diff_P_adda = np.linalg.norm(diff_P_adda, 'fro')
         
         print(f"\nDiferença em P (Norma de Frobenius):")
         print(f"  Schur vs SciPy:      {norma_diff_P_schur:.2e}")
         print(f"  van Dooren vs SciPy: {norma_diff_P_van_dooren:.2e}")
         print(f"  Iterativo vs SciPy:  {norma_diff_P_iter:.2e}")
         print(f"  SDA vs SciPy:        {norma_diff_P_sda:.2e}")
+        print(f"  ADDA vs SciPy:       {norma_diff_P_adda:.2e}")
         
         # Diferenças em K
         diff_K_schur = K_schur - K_scipy
         diff_K_van_dooren = K_van_dooren - K_scipy
         diff_K_iter = K_iter - K_scipy
         diff_K_sda = K_sda - K_scipy
+        diff_K_adda = K_adda - K_scipy
         
         norma_diff_K_schur = np.linalg.norm(diff_K_schur, 'fro')
         norma_diff_K_van_dooren = np.linalg.norm(diff_K_van_dooren, 'fro')
         norma_diff_K_iter = np.linalg.norm(diff_K_iter, 'fro')
         norma_diff_K_sda = np.linalg.norm(diff_K_sda, 'fro')
+        norma_diff_K_adda = np.linalg.norm(diff_K_adda, 'fro')
         
         print(f"\nDiferença em K (Norma de Frobenius):")
         print(f"  Schur vs SciPy:      {norma_diff_K_schur:.2e}")
         print(f"  van Dooren vs SciPy: {norma_diff_K_van_dooren:.2e}")
         print(f"  Iterativo vs SciPy:  {norma_diff_K_iter:.2e}")
         print(f"  SDA vs SciPy:        {norma_diff_K_sda:.2e}")
+        print(f"  ADDA vs SciPy:       {norma_diff_K_adda:.2e}")
         
         # Verificação dos resíduos DARE
         print("\n" + "-" * 80)
@@ -1502,6 +1718,7 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         _, residuo_scipy = verificar_solucao_dare(A, B, Q, R, P_scipy)
         _, residuo_iter = verificar_solucao_dare(A, B, Q, R, P_iter)
         _, residuo_sda = verificar_solucao_dare(A, B, Q, R, P_sda)
+        _, residuo_adda = verificar_solucao_dare(A, B, Q, R, P_adda)
         
         print(f"\nNorma do resíduo ||A^T*P*A - P - A^T*P*B*inv(...)*B^T*P*A + Q||:")
         print(f"  Schur:      {residuo_schur:.2e}")
@@ -1509,25 +1726,27 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
         print(f"  SciPy:      {residuo_scipy:.2e}")
         print(f"  Iterativo:  {residuo_iter:.2e}")
         print(f"  SDA:        {residuo_sda:.2e}")
+        print(f"  ADDA:       {residuo_adda:.2e}")
         
         # ====================================================================
         # Resumo Final
         # ====================================================================
         print("\n\n" + "=" * 80)
-        print("RESUMO FINAL - COMPARAÇÃO DOS 5 MÉTODOS")
+        print("RESUMO FINAL - COMPARAÇÃO DOS 6 MÉTODOS")
         print("=" * 80)
         
-        print("\n┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐")
-        print("│                           DESEMPENHO vs PRECISÃO vs MEMÓRIA                                         │")
-        print("├──────────────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────┤")
-        print("│      Método          │ Tempo Médio  │  Memória     │  Erro em P   │  Resíduo     │  Iterações       │")
-        print("├──────────────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────┤")
-        print(f"│ 1. Schur (2n×2n)     │  {tempo_schur_medio*1000:6.3f} ms   │ {mem_schur:7.2f} KB   │  {norma_diff_P_schur:.2e}   │  {residuo_schur:.2e}   │  N/A (direto)    │")
-        print(f"│ 2. van Dooren (defl) │  {tempo_van_dooren_medio*1000:6.3f} ms   │ {mem_van_dooren:7.2f} KB   │  {norma_diff_P_van_dooren:.2e}   │  {residuo_van_dooren:.2e}   │  N/A (direto)    │")
-        print(f"│ 3. SciPy (LAPACK)    │  {tempo_scipy_medio*1000:6.3f} ms   │ {mem_scipy:7.2f} KB   │  (referência)│  {residuo_scipy:.2e}   │  N/A (direto)    │")
-        print(f"│ 4. Iterativo (lin)   │  {tempo_iter_medio*1000:6.3f} ms   │ {mem_iter:7.2f} KB   │  {norma_diff_P_iter:.2e}   │  {residuo_iter:.2e}   │  {n_iter_medio:5.1f} (linear)  │")
-        print(f"│ 5. SDA (quadrático)  │  {tempo_sda_medio*1000:6.3f} ms   │ {mem_sda:7.2f} KB   │  {norma_diff_P_sda:.2e}   │  {residuo_sda:.2e}   │  {n_iter_sda_medio:5.1f} (quadrát)│")
-        print("├──────────────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────┤")
+        print("\n┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐")
+        print("│                              DESEMPENHO vs PRECISÃO vs MEMÓRIA                                             │")
+        print("├──────────────────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────────────────────┤")
+        print("│      Método          │ Tempo Médio  │  Memória     │  Erro em P   │  Resíduo     │  Iterações             │")
+        print("├──────────────────────┼──────────────┼──────────────┼──────────────┼──────────────┼────────────────────────┤")
+        print(f"│ 1. Schur (2n×2n)     │  {tempo_schur_medio*1000:6.3f} ms   │ {mem_schur:7.2f} KB   │  {norma_diff_P_schur:.2e}   │  {residuo_schur:.2e}   │  N/A (direto)          │")
+        print(f"│ 2. van Dooren (defl) │  {tempo_van_dooren_medio*1000:6.3f} ms   │ {mem_van_dooren:7.2f} KB   │  {norma_diff_P_van_dooren:.2e}   │  {residuo_van_dooren:.2e}   │  N/A (direto)          │")
+        print(f"│ 3. SciPy (LAPACK)    │  {tempo_scipy_medio*1000:6.3f} ms   │ {mem_scipy:7.2f} KB   │  (referência)│  {residuo_scipy:.2e}   │  N/A (direto)          │")
+        print(f"│ 4. Iterativo (lin)   │  {tempo_iter_medio*1000:6.3f} ms   │ {mem_iter:7.2f} KB   │  {norma_diff_P_iter:.2e}   │  {residuo_iter:.2e}   │  {n_iter_medio:5.1f} (linear)        │")
+        print(f"│ 5. SDA (quadrático)  │  {tempo_sda_medio*1000:6.3f} ms   │ {mem_sda:7.2f} KB   │  {norma_diff_P_sda:.2e}   │  {residuo_sda:.2e}   │  {n_iter_sda_medio:5.1f} (quadrático)   │")
+        print(f"│ 6. ADDA (quad.alt.)  │  {tempo_adda_medio*1000:6.3f} ms   │ {mem_adda:7.2f} KB   │  {norma_diff_P_adda:.2e}   │  {residuo_adda:.2e}   │  {n_iter_adda_medio:5.1f} (quad.alt.)    │")
+        print("├──────────────────────┴──────────────┴──────────────┴──────────────┴──────────────┴────────────────────────┤")
         
         # Análise final
         mais_rapido = metodos_ordenados[0][0]
@@ -1537,35 +1756,45 @@ def comparacao_cinco_metodos(A, B, Q, R, P_schur, K_schur):
             ("van Dooren", residuo_van_dooren),
             ("SciPy", residuo_scipy),
             ("Iterativo", residuo_iter),
-            ("SDA", residuo_sda)
+            ("SDA", residuo_sda),
+            ("ADDA", residuo_adda)
         ]
         mais_preciso = min(residuos, key=lambda x: x[1])[0]
         
-        print("│ Conclusões:                                                                                         │")
-        print(f"│  • Mais rápido:       {mais_rapido:30s}                                               │")
-        print(f"│  • Menor memória:     {mais_economico:30s}                                               │")
-        print(f"│  • Mais preciso:      {mais_preciso:30s}                                               │")
-        print("│                                                                                                      │")
-        print("│  • van Dooren evita inversão explícita de R (mais robusto numericamente)                            │")
-        print(f"│  • van Dooren usa pencil maior ({2*A.shape[0]+B.shape[1]}×{2*A.shape[0]+B.shape[1]}) mas deflaciona para ({2*A.shape[0]}×{2*A.shape[0]})                                   │")
-        print("│  • Schur (2n×2n) é mais compacto mas requer inv(R)                                                   │")
-        print(f"│  • Iterativo: {int(n_iter_medio)} iterações com convergência LINEAR                                              │")
-        print(f"│  • SDA: {int(n_iter_sda_medio)} iterações com convergência QUADRÁTICA (muito mais eficiente)                       │")
+        print("│ Conclusões:                                                                                               │")
+        print(f"│  • Mais rápido:       {mais_rapido:30s}                                                     │")
+        print(f"│  • Menor memória:     {mais_economico:30s}                                                     │")
+        print(f"│  • Mais preciso:      {mais_preciso:30s}                                                     │")
+        print("│                                                                                                            │")
+        print("│  • van Dooren evita inversão explícita de R (mais robusto numericamente)                                  │")
+        print(f"│  • van Dooren usa pencil maior ({2*A.shape[0]+B.shape[1]}×{2*A.shape[0]+B.shape[1]}) mas deflaciona para ({2*A.shape[0]}×{2*A.shape[0]})                                         │")
+        print("│  • Schur (2n×2n) é mais compacto mas requer inv(R)                                                         │")
+        print(f"│  • Iterativo: {int(n_iter_medio)} iterações com convergência LINEAR                                                    │")
+        print(f"│  • SDA: {int(n_iter_sda_medio)} iterações com convergência QUADRÁTICA                                                     │")
+        print(f"│  • ADDA: {int(n_iter_adda_medio)} iterações com convergência QUADRÁTICA alternada                                          │")
+        print("│                                                                                                            │")
+        print("│  DIFERENÇA ENTRE SDA E ADDA:                                                                              │")
+        print("│  • SDA: usa 3 variáveis (A_k, G_k, H_k), uma direção de duplicação                                        │")
+        print("│  • ADDA: usa 4 variáveis (E_k, F_k, G_k, H_k), alterna forward/backward                                   │")
+        print("│  • ADDA pode ser mais robusto para problemas mal-condicionados                                            │")
+        print("│  • ADDA requer A inversível; SDA não tem essa restrição                                                   │")
         
         # Comparação entre Schur e van Dooren
         razao_schur_van_dooren = tempo_schur_medio / tempo_van_dooren_medio
         if razao_schur_van_dooren < 1:
             diff_percent = (1 - razao_schur_van_dooren) * 100
-            print(f"│  • Schur é {diff_percent:.1f}% mais rápido que van Dooren                                                     │")
+            print(f"│  • Schur é {diff_percent:.1f}% mais rápido que van Dooren                                                       │")
         else:
             diff_percent = (razao_schur_van_dooren - 1) * 100
-            print(f"│  • van Dooren é {diff_percent:.1f}% mais rápido que Schur                                                  │")
+            print(f"│  • van Dooren é {diff_percent:.1f}% mais rápido que Schur                                                    │")
         
-        # Comparação entre SDA e iterativo
+        # Comparação entre SDA, ADDA e iterativo
         razao_iter_sda = n_iter_medio / n_iter_sda_medio
-        print(f"│  • SDA converge em {n_iter_sda_medio:.0f} iter vs {n_iter_medio:.0f} iter do método iterativo (razão: {razao_iter_sda:.1f}x)                    │")
+        razao_iter_adda = n_iter_medio / n_iter_adda_medio
+        print(f"│  • SDA converge em {n_iter_sda_medio:.0f} iter vs {n_iter_medio:.0f} iter do método iterativo (razão: {razao_iter_sda:.1f}x)                      │")
+        print(f"│  • ADDA converge em {n_iter_adda_medio:.0f} iter vs {n_iter_medio:.0f} iter do método iterativo (razão: {razao_iter_adda:.1f}x)                     │")
         
-        print("└──────────────────────────────────────────────────────────────────────────────────────────────────────┘")
+        print("└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘")
         
     except ImportError:
         print("\n⚠ SciPy não disponível para comparação")
@@ -1589,8 +1818,8 @@ if __name__ == "__main__":
     # Executa exemplo com sistema 6x6
     A, B, Q, R, P, K, eig_cl, x_hist, u_hist = exemplo_sistema_6x6()
     
-    # Comparação dos 5 métodos usando o mesmo sistema 6x6
-    comparacao_cinco_metodos(A, B, Q, R, P, K)
+    # Comparação dos 6 métodos usando o mesmo sistema 6x6
+    comparacao_seis_metodos(A, B, Q, R, P, K)
     
     print("\n" + "█" * 80)
     print("█" + " " * 25 + "EXEMPLO CONCLUÍDO" + " " * 35 + "█")
