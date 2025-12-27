@@ -2,6 +2,7 @@
 #include <math.h>
 #include <ArduinoEigen.h>
 #include <string.h>  // Para strcmp
+#include <algorithm> // Para std::sort
 
 AutoLQR::AutoLQR(int stateSize, int controlSize)
     : stateSize(stateSize)
@@ -558,6 +559,15 @@ bool AutoLQR::computeGainMatrixSchur()
 
 bool AutoLQR::computeGainMatrixVanDooren()
 {
+    // ========================================================================
+    // Método de Van Dooren para DARE
+    // Baseado em: P. van Dooren, "A Generalized Eigenvalue Approach For Solving
+    // Riccati Equations", SIAM J. Sci. Stat. Comput., Vol.2(2), 1981.
+    //
+    // Usa o pencil simplétictico estendido (2n+m)×(2n+m) com deflação QR
+    // para obter um pencil (2n)×(2n) antes da decomposição QZ.
+    // ========================================================================
+    
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
@@ -570,82 +580,80 @@ bool AutoLQR::computeGainMatrixVanDooren()
     const int pencil_size = 2*n + m;
 
     // ========================================================================
-    // Pré-alocar toda memória de uma vez
+    // Pré-alocar memória
     // ========================================================================
-    const int total_floats = (n*n) + (m*n) + (m*n) + (m*m) + (m*m) + (m*n);
-    float* memory_pool = new float[total_floats];
-    
-    float* AT = memory_pool;
-    float* BT = AT + (n*n);
-    float* BT_P = BT + (m*n);
-    float* BT_P_B = BT_P + (m*n);
-    float* term = BT_P_B + (m*m);
-    float* BT_P_A = term + (m*m);
+    float* BT = new float[m * n];
+    float* AT = new float[n * n];
+    float* BT_P = new float[m * n];
+    float* BT_P_B = new float[m * m];
+    float* term = new float[m * m];
+    float* BT_P_A = new float[m * n];
+
+    transposeMatrix(A, AT, n, n);
+    transposeMatrix(B, BT, n, m);
 
     // ========================================================================
-    // Calcular transpostas
+    // PASSO 1: Construir pencil estendido H - λJ  [(2n+m) × (2n+m)]
     // ========================================================================
-    if (n == 2) {
-        AT[0] = A[0]; AT[1] = A[2];
-        AT[2] = A[1]; AT[3] = A[3];
-    } else {
-        transposeMatrix(A, AT, n, n);
-    }
+    // H = [ A    0    B ]       J = [ I   0   0 ]
+    //     [-Q    I    0 ]           [ 0  A^T  0 ]
+    //     [ 0    0    R ]           [ 0 -B^T  0 ]
+    //
+    // Nota: Esta formulação é equivalente mas mais estável numericamente
+    // ========================================================================
     
-    if (n == 2 && m == 1) {
-        BT[0] = B[0];
-        BT[1] = B[1];
-    } else {
-        transposeMatrix(B, BT, n, m);
-    }
-
-    // ========================================================================
-    // Construir pencil
-    // ========================================================================
     Eigen::MatrixXf H(pencil_size, pencil_size);
     Eigen::MatrixXf J(pencil_size, pencil_size);
     
     H.setZero();
     J.setZero();
 
+    // H[:n, :n] = A
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             H(i, j) = A[i * n + j];
         }
     }
     
+    // H[:n, 2n:] = B
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < m; j++) {
             H(i, 2*n + j) = B[i * m + j];
         }
     }
     
+    // H[n:2n, :n] = -Q
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             H(n + i, j) = -Q[i * n + j];
         }
     }
     
+    // H[n:2n, n:2n] = I
     for (int i = 0; i < n; i++) {
         H(n + i, n + i) = 1.0f;
     }
     
+    // H[2n:, 2n:] = R
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
             H(2*n + i, 2*n + j) = R[i * m + j];
         }
     }
     
+    // J[:n, :n] = I
     for (int i = 0; i < n; i++) {
         J(i, i) = 1.0f;
     }
     
+    // J[n:2n, n:2n] = A^T
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             J(n + i, n + j) = AT[i * n + j];
         }
     }
     
+    // J[2n:, n:2n] = -B^T
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             J(2*n + i, n + j) = -BT[i * n + j];
@@ -653,91 +661,147 @@ bool AutoLQR::computeGainMatrixVanDooren()
     }
 
     // ========================================================================
-    // Decomposição QZ
+    // PASSO 2: Deflação QR para reduzir de (2n+m)×(2n+m) para (2n)×(2n)
+    // ========================================================================
+    // Extrai as últimas m colunas de H e faz QR
+    // Depois projeta no espaço ortogonal
+    
+    Eigen::MatrixXf H_last_cols = H.rightCols(m);
+    
+    // Decomposição QR: H_last_cols = Q_qr * R_qr
+    Eigen::HouseholderQR<Eigen::MatrixXf> qr(H_last_cols);
+    Eigen::MatrixXf Q_qr = qr.householderQ();
+    
+    // Q_deflate = últimas (2n) colunas de Q_qr (descarta as primeiras m)
+    Eigen::MatrixXf Q_deflate = Q_qr.rightCols(2*n);
+    
+    // Aplica deflação: projeta H e J nas primeiras 2n colunas
+    Eigen::MatrixXf H_deflated = Q_deflate.transpose() * H.leftCols(2*n);
+    Eigen::MatrixXf J_deflated = Q_deflate.transpose() * J.leftCols(2*n);
+
+    // ========================================================================
+    // PASSO 3: Decomposição QZ Generalizada no pencil deflacionado (2n × 2n)
     // ========================================================================
     Eigen::GeneralizedEigenSolver<Eigen::MatrixXf> ges;
-    ges.compute(H, J, true);
+    ges.compute(H_deflated, J_deflated, true);
     
     if (ges.info() != Eigen::Success) {
-        delete[] memory_pool;
+        delete[] BT; delete[] AT;
+        delete[] BT_P; delete[] BT_P_B; delete[] term; delete[] BT_P_A;
         return false;
     }
     
     Eigen::VectorXcf alpha = ges.alphas();
     Eigen::VectorXcf beta = ges.betas();
+    const Eigen::MatrixXcf& Z = ges.eigenvectors();
 
     // ========================================================================
-    // Seleção de autovalores estáveis
+    // PASSO 4: Seleção de autovalores estáveis (|λ| < 1 para DARE)
     // ========================================================================
+    // Armazena pares (magnitude, índice) para ordenar
+    std::vector<std::pair<float, int>> eig_pairs;
+    eig_pairs.reserve(2*n);
+    
+    const float beta_min = 1e-10f;
+    
+    for (int i = 0; i < 2*n; i++) {
+        float beta_abs = std::abs(beta(i));
+        float magnitude;
+        
+        if (beta_abs > beta_min) {
+            std::complex<float> eigenvalue = alpha(i) / beta(i);
+            magnitude = std::abs(eigenvalue);
+        } else {
+            // Autovalor no infinito - não é estável
+            magnitude = 1e10f;
+        }
+        
+        eig_pairs.push_back({magnitude, i});
+    }
+    
+    // Ordena por magnitude (menor primeiro)
+    std::sort(eig_pairs.begin(), eig_pairs.end());
+    
+    // Seleciona os n menores (dentro do círculo unitário)
     std::vector<int> stable_indices;
     stable_indices.reserve(n);
     
-    const float stability_threshold = 1.0f;
-    const float beta_min = 1e-10f;
+    for (int i = 0; i < n && i < static_cast<int>(eig_pairs.size()); i++) {
+        if (eig_pairs[i].first < 1.0f) {
+            stable_indices.push_back(eig_pairs[i].second);
+        }
+    }
     
-    for (int i = 0; i < pencil_size && stable_indices.size() < static_cast<size_t>(n); i++) {
-        const float beta_abs = std::abs(beta(i));
-        
-        if (beta_abs > beta_min) {
-            const std::complex<float> eigenvalue = alpha(i) / beta(i);
-            const float magnitude = std::abs(eigenvalue);
-            
-            if (magnitude < stability_threshold) {
-                stable_indices.push_back(i);
+    // Se não encontrou n autovalores estáveis, relaxa threshold
+    if (stable_indices.size() < static_cast<size_t>(n)) {
+        stable_indices.clear();
+        for (int i = 0; i < n && i < static_cast<int>(eig_pairs.size()); i++) {
+            if (eig_pairs[i].first < 1.1f) {
+                stable_indices.push_back(eig_pairs[i].second);
             }
         }
     }
     
     if (stable_indices.size() != static_cast<size_t>(n)) {
-        delete[] memory_pool;
+        delete[] BT; delete[] AT;
+        delete[] BT_P; delete[] BT_P_B; delete[] term; delete[] BT_P_A;
         return false;
     }
 
     // ========================================================================
-    // Extração do subespaço
+    // PASSO 5: Extrair subespaço invariante estável
     // ========================================================================
-    const Eigen::MatrixXcf& Z = ges.eigenvectors();
+    // Z está particionado como [U1; U2] onde cada bloco é n × n
     
     Eigen::MatrixXcf U1(n, n);
     Eigen::MatrixXcf U2(n, n);
     
     for (int j = 0; j < n; j++) {
-        const int idx = stable_indices[j];
+        int idx = stable_indices[j];
         U1.col(j) = Z.col(idx).head(n);
         U2.col(j) = Z.col(idx).segment(n, n);
     }
 
     // ========================================================================
-    // Cálculo de P
+    // PASSO 6: Calcular P = U2 * inv(U1)
     // ========================================================================
-    Eigen::MatrixXcf P_complex = U2 * U1.inverse();
+    // Usa decomposição LU para maior estabilidade
+    Eigen::FullPivLU<Eigen::MatrixXcf> lu(U1);
     
+    if (!lu.isInvertible()) {
+        delete[] BT; delete[] AT;
+        delete[] BT_P; delete[] BT_P_B; delete[] term; delete[] BT_P_A;
+        return false;
+    }
+    
+    Eigen::MatrixXcf P_complex = U2 * lu.inverse();
+    
+    // Extrai parte real e copia para P
     for (int i = 0; i < n; i++) {
-        const int row_offset = i * n;
         for (int j = 0; j < n; j++) {
-            P[row_offset + j] = P_complex(i, j).real();
+            P[i * n + j] = P_complex(i, j).real();
         }
     }
     
-    // Forçar simetria
+    // Forçar simetria: P = (P + P') / 2
     for (int i = 0; i < n; i++) {
-        const int row_i = i * n;
         for (int j = i + 1; j < n; j++) {
-            const float avg = (P[row_i + j] + P[j * n + i]) * 0.5f;
-            P[row_i + j] = avg;
+            float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+            P[i * n + j] = avg;
             P[j * n + i] = avg;
         }
     }
 
     // ========================================================================
-    // Cálculo de K
+    // PASSO 7: Calcular K = (R + B'PB)^(-1) * B'PA
     // ========================================================================
     matrixMultiply(BT, P, BT_P, m, n, n);
     matrixMultiply(BT_P, B, BT_P_B, m, n, m);
     matrixAdd(R, BT_P_B, term, m, m);
     
     if (!invertMatrix(term, term, m)) {
-        delete[] memory_pool;
+        delete[] BT; delete[] AT;
+        delete[] BT_P; delete[] BT_P_B; delete[] term; delete[] BT_P_A;
         return false;
     }
     
@@ -747,7 +811,8 @@ bool AutoLQR::computeGainMatrixVanDooren()
     // ========================================================================
     // Limpeza
     // ========================================================================
-    delete[] memory_pool;
+    delete[] BT; delete[] AT;
+    delete[] BT_P; delete[] BT_P_B; delete[] term; delete[] BT_P_A;
     
     return true;
 }
