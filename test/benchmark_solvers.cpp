@@ -13,7 +13,6 @@ namespace RiccatiBenchmark {
     AutoLQR lqr_asda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_sda_scaled(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_adda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
-    AutoLQR lqr_schur(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_vd(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_iter(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
 
@@ -22,7 +21,6 @@ namespace RiccatiBenchmark {
     unsigned long times_asda[NUM_ITERATIONS];
     unsigned long times_sda_scaled[NUM_ITERATIONS];
     unsigned long times_adda[NUM_ITERATIONS];
-    unsigned long times_schur[NUM_ITERATIONS];
     unsigned long times_vd[NUM_ITERATIONS];
     unsigned long times_iter[NUM_ITERATIONS];
 
@@ -120,7 +118,6 @@ namespace RiccatiBenchmark {
         lqr_asda.setCostMatrices(Q, R);
         lqr_sda_scaled.setCostMatrices(Q, R);
         lqr_adda.setCostMatrices(Q, R);
-        lqr_schur.setCostMatrices(Q, R);
         lqr_vd.setCostMatrices(Q, R);
         lqr_iter.setCostMatrices(Q, R);
         float roll = 0, pitch = 0, yaw = 0;
@@ -173,13 +170,6 @@ namespace RiccatiBenchmark {
             lqr_adda.computeGains("ADDA");
             times_adda[i] = micros() - t0;
             
-            // SCHUR
-            lqr_schur.setStateMatrix(Ad_bench);
-            lqr_schur.setInputMatrix(Bd_bench);
-            t0 = micros();
-            lqr_schur.computeGains("SCHUR");
-            times_schur[i] = micros() - t0;
-            
             // VAN_DOOREN
             lqr_vd.setStateMatrix(Ad_bench);
             lqr_vd.setInputMatrix(Bd_bench);
@@ -198,9 +188,9 @@ namespace RiccatiBenchmark {
         
         // Cálculo estatístico para todos os métodos
         double sum_sda = 0, sum_sda_ss = 0, sum_asda = 0, sum_sda_scaled = 0, sum_adda = 0;
-        double sum_schur = 0, sum_vd = 0, sum_iter = 0;
+        double sum_vd = 0, sum_iter = 0;
         double sq_sum_sda = 0, sq_sum_sda_ss = 0, sq_sum_asda = 0, sq_sum_sda_scaled = 0, sq_sum_adda = 0;
-        double sq_sum_schur = 0, sq_sum_vd = 0, sq_sum_iter = 0;
+        double sq_sum_vd = 0, sq_sum_iter = 0;
         
         for (int i = 0; i < NUM_ITERATIONS; i++) {
             double t;
@@ -224,10 +214,6 @@ namespace RiccatiBenchmark {
             t = (double)times_adda[i];
             sum_adda += t;
             sq_sum_adda += t * t;
-            
-            t = (double)times_schur[i];
-            sum_schur += t;
-            sq_sum_schur += t * t;
             
             t = (double)times_vd[i];
             sum_vd += t;
@@ -264,10 +250,6 @@ namespace RiccatiBenchmark {
         double std_adda = safe_std(sq_sum_adda, sum_adda, NUM_ITERATIONS);
         double std_mean_adda = std_adda / sqrt(NUM_ITERATIONS);
         
-        double mean_schur = sum_schur / NUM_ITERATIONS;
-        double std_schur = safe_std(sq_sum_schur, sum_schur, NUM_ITERATIONS);
-        double std_mean_schur = std_schur / sqrt(NUM_ITERATIONS);
-        
         double mean_vd = sum_vd / NUM_ITERATIONS;
         double std_vd = safe_std(sq_sum_vd, sum_vd, NUM_ITERATIONS);
         double std_mean_vd = std_vd / sqrt(NUM_ITERATIONS);
@@ -284,7 +266,6 @@ namespace RiccatiBenchmark {
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ASDA", mean_asda, std_asda, std_mean_asda);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "SDA Scaled", mean_sda_scaled, std_sda_scaled, std_mean_sda_scaled);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ADDA", mean_adda, std_adda, std_mean_adda);
-        Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "SCHUR", mean_schur, std_schur, std_mean_schur);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "VAN DOOREN", mean_vd, std_vd, std_mean_vd);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ITERATIVE", mean_iter, std_iter, std_mean_iter);
         Serial.println("==================================================================");
@@ -303,7 +284,6 @@ namespace RiccatiBenchmark {
         float K_asda[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_sda_scaled[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_adda[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
-        float K_schur[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_vd[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         
         lqr_sda.exportGains(K_sda);
@@ -311,7 +291,6 @@ namespace RiccatiBenchmark {
         lqr_asda.exportGains(K_asda);
         lqr_sda_scaled.exportGains(K_sda_scaled);
         lqr_adda.exportGains(K_adda);
-        lqr_schur.exportGains(K_schur);
         lqr_vd.exportGains(K_vd);
         
         // Calcular erro RMS para cada método
@@ -329,7 +308,6 @@ namespace RiccatiBenchmark {
         Serial.printf("Erro RMS ASDA vs ITER:         %.6e\n", calcRMSError(K_asda));
         Serial.printf("Erro RMS SDA Scaled vs ITER:   %.6e\n", calcRMSError(K_sda_scaled));
         Serial.printf("Erro RMS ADDA vs ITER:         %.6e\n", calcRMSError(K_adda));
-        Serial.printf("Erro RMS SCHUR vs ITER:        %.6e\n", calcRMSError(K_schur));
         Serial.printf("Erro RMS VAN DOOREN vs ITER:   %.6e\n", calcRMSError(K_vd));
         Serial.println("==================================================================");
         
