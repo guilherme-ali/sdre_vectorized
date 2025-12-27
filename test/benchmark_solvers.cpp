@@ -6,12 +6,13 @@
 namespace RiccatiBenchmark {
     const int STATE_SIZE_BENCH = 6;
     const int CONTROL_SIZE_BENCH = 3;
-    const int NUM_ITERATIONS = 1000;
+    const int NUM_ITERATIONS = 100;
 
     AutoLQR lqr_sda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_sda_ss(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_asda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_sda_scaled(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
+    AutoLQR lqr_adda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_schur(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_vd(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_iter(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
@@ -20,6 +21,7 @@ namespace RiccatiBenchmark {
     unsigned long times_sda_ss[NUM_ITERATIONS];
     unsigned long times_asda[NUM_ITERATIONS];
     unsigned long times_sda_scaled[NUM_ITERATIONS];
+    unsigned long times_adda[NUM_ITERATIONS];
     unsigned long times_schur[NUM_ITERATIONS];
     unsigned long times_vd[NUM_ITERATIONS];
     unsigned long times_iter[NUM_ITERATIONS];
@@ -109,7 +111,7 @@ namespace RiccatiBenchmark {
         delay(2000);
         Serial.println("\n\n=========================================================");
         Serial.println("       INICIANDO BENCHMARK DE MÉTODOS RICCATI");
-        Serial.println("     Incluindo métodos SDA melhorados (SDA-ss, ASDA, Scaled)");
+        Serial.println("     Incluindo métodos SDA melhorados (SDA-ss, ASDA, Scaled, ADDA)");
         Serial.println("=========================================================");
         Serial.printf("Iterações: %d\n", NUM_ITERATIONS);
         Serial.println("Aguarde...\n");
@@ -117,6 +119,7 @@ namespace RiccatiBenchmark {
         lqr_sda_ss.setCostMatrices(Q, R);
         lqr_asda.setCostMatrices(Q, R);
         lqr_sda_scaled.setCostMatrices(Q, R);
+        lqr_adda.setCostMatrices(Q, R);
         lqr_schur.setCostMatrices(Q, R);
         lqr_vd.setCostMatrices(Q, R);
         lqr_iter.setCostMatrices(Q, R);
@@ -163,6 +166,13 @@ namespace RiccatiBenchmark {
             lqr_sda_scaled.computeGains("SDA_SCALED");
             times_sda_scaled[i] = micros() - t0;
             
+            // ADDA (Alternating-Directional Doubling Algorithm)
+            lqr_adda.setStateMatrix(Ad_bench);
+            lqr_adda.setInputMatrix(Bd_bench);
+            t0 = micros();
+            lqr_adda.computeGains("ADDA");
+            times_adda[i] = micros() - t0;
+            
             // SCHUR
             lqr_schur.setStateMatrix(Ad_bench);
             lqr_schur.setInputMatrix(Bd_bench);
@@ -187,9 +197,9 @@ namespace RiccatiBenchmark {
         }
         
         // Cálculo estatístico para todos os métodos
-        double sum_sda = 0, sum_sda_ss = 0, sum_asda = 0, sum_sda_scaled = 0;
+        double sum_sda = 0, sum_sda_ss = 0, sum_asda = 0, sum_sda_scaled = 0, sum_adda = 0;
         double sum_schur = 0, sum_vd = 0, sum_iter = 0;
-        double sq_sum_sda = 0, sq_sum_sda_ss = 0, sq_sum_asda = 0, sq_sum_sda_scaled = 0;
+        double sq_sum_sda = 0, sq_sum_sda_ss = 0, sq_sum_asda = 0, sq_sum_sda_scaled = 0, sq_sum_adda = 0;
         double sq_sum_schur = 0, sq_sum_vd = 0, sq_sum_iter = 0;
         
         for (int i = 0; i < NUM_ITERATIONS; i++) {
@@ -204,6 +214,9 @@ namespace RiccatiBenchmark {
             
             sum_sda_scaled += times_sda_scaled[i];
             sq_sum_sda_scaled += times_sda_scaled[i] * times_sda_scaled[i];
+            
+            sum_adda += times_adda[i];
+            sq_sum_adda += times_adda[i] * times_adda[i];
             
             sum_schur += times_schur[i];
             sq_sum_schur += times_schur[i] * times_schur[i];
@@ -231,6 +244,10 @@ namespace RiccatiBenchmark {
         double std_sda_scaled = sqrt((sq_sum_sda_scaled / NUM_ITERATIONS) - (mean_sda_scaled * mean_sda_scaled));
         double std_mean_sda_scaled = std_sda_scaled / sqrt(NUM_ITERATIONS);
         
+        double mean_adda = sum_adda / NUM_ITERATIONS;
+        double std_adda = sqrt((sq_sum_adda / NUM_ITERATIONS) - (mean_adda * mean_adda));
+        double std_mean_adda = std_adda / sqrt(NUM_ITERATIONS);
+        
         double mean_schur = sum_schur / NUM_ITERATIONS;
         double std_schur = sqrt((sq_sum_schur / NUM_ITERATIONS) - (mean_schur * mean_schur));
         double std_mean_schur = std_schur / sqrt(NUM_ITERATIONS);
@@ -250,6 +267,7 @@ namespace RiccatiBenchmark {
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "SDA-ss", mean_sda_ss, std_sda_ss, std_mean_sda_ss);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ASDA", mean_asda, std_asda, std_mean_asda);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "SDA Scaled", mean_sda_scaled, std_sda_scaled, std_mean_sda_scaled);
+        Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ADDA", mean_adda, std_adda, std_mean_adda);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "SCHUR", mean_schur, std_schur, std_mean_schur);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "VAN DOOREN", mean_vd, std_vd, std_mean_vd);
         Serial.printf("%-15s | %-15.2f | %-15.2f | %-15.4f\n", "ITERATIVE", mean_iter, std_iter, std_mean_iter);
@@ -268,6 +286,7 @@ namespace RiccatiBenchmark {
         float K_sda_ss[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_asda[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_sda_scaled[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
+        float K_adda[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_schur[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         float K_vd[CONTROL_SIZE_BENCH * STATE_SIZE_BENCH];
         
@@ -275,6 +294,7 @@ namespace RiccatiBenchmark {
         lqr_sda_ss.exportGains(K_sda_ss);
         lqr_asda.exportGains(K_asda);
         lqr_sda_scaled.exportGains(K_sda_scaled);
+        lqr_adda.exportGains(K_adda);
         lqr_schur.exportGains(K_schur);
         lqr_vd.exportGains(K_vd);
         
@@ -292,9 +312,44 @@ namespace RiccatiBenchmark {
         Serial.printf("Erro RMS SDA-ss vs ITER:       %.6e\n", calcRMSError(K_sda_ss));
         Serial.printf("Erro RMS ASDA vs ITER:         %.6e\n", calcRMSError(K_asda));
         Serial.printf("Erro RMS SDA Scaled vs ITER:   %.6e\n", calcRMSError(K_sda_scaled));
+        Serial.printf("Erro RMS ADDA vs ITER:         %.6e\n", calcRMSError(K_adda));
         Serial.printf("Erro RMS SCHUR vs ITER:        %.6e\n", calcRMSError(K_schur));
         Serial.printf("Erro RMS VAN DOOREN vs ITER:   %.6e\n", calcRMSError(K_vd));
         Serial.println("==================================================================");
+        
+        // Imprimir matrizes K para SDA, ITERATIVE e ADDA
+        Serial.println("\n=============== MATRIZ K - SDA (Original) ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_sda[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - ITERATIVE ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_ref[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - ADDA ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_adda[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
         
         Serial.println("\nReinicie o ESP32 para rodar novamente ou desative o modo benchmark.");
         while(1) { delay(1000); }
