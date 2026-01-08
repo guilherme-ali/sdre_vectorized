@@ -345,6 +345,39 @@ namespace RiccatiBenchmark {
             Serial.println("]");
         }
         
+        Serial.println("\n=============== MATRIZ K - SDA-SS (Single Shift) ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_sda_ss[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - ASDA (Adaptive) ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_asda[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
+        Serial.println("\n=============== MATRIZ K - SDA SCALED ===============");
+        Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
+        for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {
+            Serial.print("  [");
+            for (int j = 0; j < STATE_SIZE_BENCH; j++) {
+                Serial.printf("%12.6f", K_sda_scaled[i * STATE_SIZE_BENCH + j]);
+                if (j < STATE_SIZE_BENCH - 1) Serial.print(", ");
+            }
+            Serial.println("]");
+        }
+        
         Serial.println("\n=============== MATRIZ K - VAN DOOREN ===============");
         Serial.printf("K [%d x %d]:\n", CONTROL_SIZE_BENCH, STATE_SIZE_BENCH);
         for (int i = 0; i < CONTROL_SIZE_BENCH; i++) {

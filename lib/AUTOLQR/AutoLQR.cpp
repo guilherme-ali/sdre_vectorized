@@ -1642,17 +1642,19 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
 bool AutoLQR::computeGainMatrixADDA()
 {
     // Implementação do Alternating-Directional Doubling Algorithm (ADDA)
-    // Baseado em: "A structure-preserving doubling algorithm for nonsymmetric
-    // algebraic Riccati equation" - Lin, Xu (2006)
+    // Baseado em: Lin, Xu - "A structure-preserving doubling algorithm for 
+    // nonsymmetric algebraic Riccati equation" (2006)
     // 
-    // O ADDA usa duas matrizes auxiliares V e W calculadas de forma simétrica:
+    // Diferença do SDA: O ADDA usa DUAS matrizes inversas em cada iteração:
     //   V = (I + Gk·Hk)^(-1)
     //   W = (I + Hk·Gk)^(-1)
     // 
-    // Iterações:
-    //   Ak+1 = Ak·V·Ak = Ak·W·Ak  (equivalentes pela simetria)
-    //   Gk+1 = Gk + Ak·V·Gk·Ak'
-    //   Hk+1 = Hk + Ak'·Hk·V·Ak
+    // Isso explora a simetria do problema para melhor estabilidade numérica.
+    // 
+    // Iterações ADDA:
+    //   Ak+1 = Ak·V·Ak (usando V para atualização de A)
+    //   Gk+1 = Gk + Ak·V·Gk·Ak'  (usando V)
+    //   Hk+1 = Hk + Ak'·W·Hk·Ak  (usando W - alternância direcional!)
     
     if (!A || !B || !Q || !R || !K || !P)
         return false;
@@ -1661,150 +1663,180 @@ bool AutoLQR::computeGainMatrixADDA()
         return false;
     }
 
+    const int n = stateSize;
+    const int m = controlSize;
+    const int nn = n * n;
+    const int mm = m * m;
+
     // Alocação de memória
-    float* Ak = new float[stateSize * stateSize]();
-    float* Gk = new float[stateSize * stateSize]();
-    float* Hk = new float[stateSize * stateSize]();
+    float* Ak = new float[nn]();
+    float* Gk = new float[nn]();
+    float* Hk = new float[nn]();
     
-    float* Ak_next = new float[stateSize * stateSize]();
-    float* Gk_next = new float[stateSize * stateSize]();
-    float* Hk_next = new float[stateSize * stateSize]();
+    float* Ak_next = new float[nn]();
+    float* Gk_next = new float[nn]();
+    float* Hk_next = new float[nn]();
     
-    float* R_inv = new float[controlSize * controlSize]();
-    float* BT = new float[controlSize * stateSize]();
-    float* AT = new float[stateSize * stateSize]();
-    float* V = new float[stateSize * stateSize]();
-    float* Temp1 = new float[stateSize * stateSize]();
-    float* Temp2 = new float[stateSize * stateSize]();
-    float* Temp3 = new float[stateSize * stateSize]();
+    float* R_inv = new float[mm]();
+    float* BT = new float[m * n]();
+    float* AT = new float[nn]();
+    float* V = new float[nn]();      // (I + Gk·Hk)^(-1)
+    float* W = new float[nn]();      // (I + Hk·Gk)^(-1) - ADDA específico
+    float* Temp1 = new float[nn]();
+    float* Temp2 = new float[nn]();
+    float* Temp3 = new float[nn]();
     
     // ========================================================================
     // INICIALIZAÇÃO DO ADDA
     // ========================================================================
     
     // 1. Ak = A
-    matrixCopy(A, Ak, stateSize * stateSize);
+    matrixCopy(A, Ak, nn);
     
     // 2. Calcular transpostas
-    transposeMatrix(A, AT, stateSize, stateSize);
-    transposeMatrix(B, BT, stateSize, controlSize);
+    transposeMatrix(A, AT, n, n);
+    transposeMatrix(B, BT, n, m);
     
     // 3. Calcular R_inv
-    matrixCopy(R, R_inv, controlSize * controlSize);
-    if (!invertMatrix(R_inv, R_inv, controlSize)) {
+    matrixCopy(R, R_inv, mm);
+    if (!invertMatrix(R_inv, R_inv, m)) {
         delete[] Ak; delete[] Gk; delete[] Hk;
         delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
         delete[] R_inv; delete[] BT; delete[] AT;
-        delete[] V; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+        delete[] V; delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
         return false;
     }
     
     // 4. Gk = B * R^(-1) * B'
-    float* B_Rinv = new float[stateSize * controlSize];
-    matrixMultiply(B, R_inv, B_Rinv, stateSize, controlSize, controlSize);
-    matrixMultiply(B_Rinv, BT, Gk, stateSize, controlSize, stateSize);
+    float* B_Rinv = new float[n * m];
+    matrixMultiply(B, R_inv, B_Rinv, n, m, m);
+    matrixMultiply(B_Rinv, BT, Gk, n, m, n);
     delete[] B_Rinv;
 
     // 5. Hk = Q
-    matrixCopy(Q, Hk, stateSize * stateSize);
+    matrixCopy(Q, Hk, nn);
 
     // ========================================================================
-    // LOOP ADDA - Iterações de dobramento
+    // LOOP ADDA - Iterações de dobramento com alternância direcional
     // ========================================================================
     const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
 
     for (int iter = 0; iter < maxIterations; iter++) {
-        // V = (I + Gk·Hk)^(-1)
-        matrixMultiply(Gk, Hk, Temp1, stateSize, stateSize, stateSize);
+        // ================================================================
+        // ADDA: Calcular AMBAS as inversas V e W
+        // ================================================================
         
-        for (int i = 0; i < stateSize; i++) {
-            Temp1[i * stateSize + i] += 1.0f;
+        // V = (I + Gk·Hk)^(-1)
+        matrixMultiply(Gk, Hk, Temp1, n, n, n);
+        for (int i = 0; i < n; i++) {
+            Temp1[i * n + i] += 1.0f;
+        }
+        matrixCopy(Temp1, V, nn);
+        if (!invertMatrix(V, V, n)) {
+            break;
         }
         
-        matrixCopy(Temp1, V, stateSize * stateSize);
-        if (!invertMatrix(V, V, stateSize)) {
+        // W = (I + Hk·Gk)^(-1) - ADDA específico (alternância)
+        matrixMultiply(Hk, Gk, Temp1, n, n, n);
+        for (int i = 0; i < n; i++) {
+            Temp1[i * n + i] += 1.0f;
+        }
+        matrixCopy(Temp1, W, nn);
+        if (!invertMatrix(W, W, n)) {
             break;
         }
         
         // ================================================================
-        // Iterações ADDA (equivalentes ao SDA para DARE simétrica)
+        // Iterações ADDA com alternância direcional
         // ================================================================
         
-        // Temp1 = Ak·V
-        matrixMultiply(Ak, V, Temp1, stateSize, stateSize, stateSize);
+        // Ak_next = Ak·V·Ak
+        matrixMultiply(Ak, V, Temp1, n, n, n);
+        matrixMultiply(Temp1, Ak, Ak_next, n, n, n);
         
-        // Ak_next = (Ak·V)·Ak
-        matrixMultiply(Temp1, Ak, Ak_next, stateSize, stateSize, stateSize);
+        // Gk_next = Gk + Ak·V·Gk·Ak'  (usa V)
+        transposeMatrix(Ak, AT, n, n);
+        matrixMultiply(Gk, AT, Temp2, n, n, n);
+        matrixMultiply(Temp1, Temp2, Temp3, n, n, n);  // Temp1 ainda é Ak·V
+        matrixAdd(Gk, Temp3, Gk_next, n, n);
         
-        // Gk_next = Gk + (Ak·V)·Gk·Ak'
-        transposeMatrix(Ak, AT, stateSize, stateSize);
-        matrixMultiply(Gk, AT, Temp2, stateSize, stateSize, stateSize);
-        matrixMultiply(Temp1, Temp2, Temp3, stateSize, stateSize, stateSize);
-        matrixAdd(Gk, Temp3, Gk_next, stateSize, stateSize);
-        
-        // Hk_next = Hk + Ak'·Hk·V·Ak
-        matrixMultiply(V, Ak, Temp2, stateSize, stateSize, stateSize);
-        matrixMultiply(Hk, Temp2, Temp3, stateSize, stateSize, stateSize);
-        matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
-        matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
+        // Hk_next = Hk + Ak'·W·Hk·Ak  (usa W - ALTERNÂNCIA!)
+        // Nota: Esta é a diferença chave do ADDA vs SDA
+        matrixMultiply(W, Hk, Temp2, n, n, n);
+        matrixMultiply(Temp2, Ak, Temp3, n, n, n);
+        matrixMultiply(AT, Temp3, Temp2, n, n, n);
+        matrixAdd(Hk, Temp2, Hk_next, n, n);
         
         // Verificar convergência
-        float diff = 0;
-        for (int i = 0; i < stateSize * stateSize; i++) {
+        float diff = 0.0f;
+        float norm_H = 0.0f;
+        for (int i = 0; i < nn; i++) {
             diff += fabsf(Hk_next[i] - Hk[i]);
+            norm_H += fabsf(Hk_next[i]);
         }
         
-        // Atualizar
-        matrixCopy(Ak_next, Ak, stateSize * stateSize);
-        matrixCopy(Gk_next, Gk, stateSize * stateSize);
-        matrixCopy(Hk_next, Hk, stateSize * stateSize);
+        float rel_diff = (norm_H > 1e-10f) ? (diff / norm_H) : diff;
         
-        if (diff < tolerance) {
+        // Atualizar
+        matrixCopy(Ak_next, Ak, nn);
+        matrixCopy(Gk_next, Gk, nn);
+        matrixCopy(Hk_next, Hk, nn);
+        
+        if (rel_diff < tolerance) {
             converged = true;
             break;
         }
     }
 
     // P = Hk (solução final)
-    matrixCopy(Hk, P, stateSize * stateSize);
+    matrixCopy(Hk, P, nn);
+    
+    // Forçar simetria de P
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            float avg = (P[i * n + j] + P[j * n + i]) * 0.5f;
+            P[i * n + j] = avg;
+            P[j * n + i] = avg;
+        }
+    }
 
     // ========================================================================
     // CÁLCULO DO GANHO K
     // ========================================================================
     // K = (R + B'·P·B)^(-1) · B'·P·A
     
-    float* BT_P = new float[controlSize * stateSize];
-    float* BT_P_B = new float[controlSize * controlSize];
-    float* BT_P_A = new float[controlSize * stateSize];
-    float* R_plus_BTPB = new float[controlSize * controlSize];
+    float* BT_P = new float[m * n];
+    float* BT_P_B = new float[mm];
+    float* BT_P_A = new float[m * n];
+    float* R_plus_BTPB = new float[mm];
     
     // BT_P = B'·P
-    matrixMultiply(BT, P, BT_P, controlSize, stateSize, stateSize);
+    matrixMultiply(BT, P, BT_P, m, n, n);
     
     // BT_P_B = (B'·P)·B
-    matrixMultiply(BT_P, B, BT_P_B, controlSize, stateSize, controlSize);
+    matrixMultiply(BT_P, B, BT_P_B, m, n, m);
     
     // R_plus_BTPB = R + B'·P·B
-    matrixAdd(R, BT_P_B, R_plus_BTPB, controlSize, controlSize);
+    matrixAdd(R, BT_P_B, R_plus_BTPB, m, m);
     
     // Inverter
-    if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, controlSize)) {
+    if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, m)) {
         converged = false;
     } else {
         // BT_P_A = (B'·P)·A
-        matrixMultiply(BT_P, A, BT_P_A, controlSize, stateSize, stateSize);
+        matrixMultiply(BT_P, A, BT_P_A, m, n, n);
         
         // K = (R + B'·P·B)^(-1) · (B'·P·A)
-        matrixMultiply(R_plus_BTPB, BT_P_A, K, controlSize, controlSize, stateSize);
+        matrixMultiply(R_plus_BTPB, BT_P_A, K, m, m, n);
     }
 
     // Limpeza
     delete[] Ak; delete[] Gk; delete[] Hk;
     delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
     delete[] R_inv; delete[] BT; delete[] AT;
-    delete[] V; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+    delete[] V; delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
     delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] R_plus_BTPB;
 
     return converged;
