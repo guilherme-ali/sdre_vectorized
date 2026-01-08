@@ -122,6 +122,27 @@ public:
      */
     void updateReference(const float* newReference);
 
+    /**
+     * @brief Get the number of iterations used in last computation
+     * @return Number of iterations, or -1 if not available
+     */
+    int getLastIterations() const;
+
+    /**
+     * @brief Get the final residual from last computation
+     * @return Final residual norm, or -1 if not available
+     */
+    float getLastResidual() const;
+
+    /**
+     * @brief Get residuals history for first iterations
+     * @param residuals Output array to store residuals (size MAX_RESIDUAL_HISTORY)
+     * @return Number of valid residuals stored
+     */
+    int getResidualHistory(float* residuals) const;
+
+    static const int MAX_RESIDUAL_HISTORY = 10; ///< Maximum number of residuals to store
+
 private:
     int stateSize; ///< Number of state variables
     int controlSize; ///< Number of control inputs
@@ -135,6 +156,11 @@ private:
     float* P; ///< Riccati equation solution
     float* Kr; ///< Kr gain matrix
     float* reference; ///< To store reference values
+    
+    int lastIterations; ///< Number of iterations in last computation
+    float lastResidual; ///< Final residual norm from last computation
+    float residualHistory[10]; ///< Residuals for first 10 iterations
+    int residualHistoryCount; ///< Number of valid entries in residualHistory
 
     /**
      * @brief Compute the optimal gain matrix by solving DARE (iterative method)

@@ -16,7 +16,15 @@ AutoLQR::AutoLQR(int stateSize, int controlSize)
     , P(nullptr)
     , Kr(nullptr)
     , reference(nullptr)
+    , lastIterations(-1)
+    , lastResidual(-1.0f)
+    , residualHistoryCount(0)
 {
+    // Inicializar histórico de resíduos
+    for (int i = 0; i < 10; i++) {
+        residualHistory[i] = 0.0f;
+    }
+    
     if (stateSize > 0 && controlSize > 0) {
         A = new float[stateSize * stateSize]();
         B = new float[stateSize * controlSize]();
@@ -221,11 +229,39 @@ bool AutoLQR::computeGainMatrixSDA()
     matrixCopy(Q, Hk, stateSize * stateSize);
 
     // ========================================================================
+    // ESCALONAMENTO INICIAL (melhora convergência inicial)
+    // ========================================================================
+    // Calcula escalonamento ótimo baseado nas normas das matrizes
+    float norm_G = 0.0f, norm_H = 0.0f;
+    for (int i = 0; i < stateSize * stateSize; i++) {
+        norm_G += Gk[i] * Gk[i];
+        norm_H += Hk[i] * Hk[i];
+    }
+    norm_G = sqrtf(norm_G);
+    norm_H = sqrtf(norm_H);
+    
+    // Escalonamento beta para equilibrar Gk e Hk
+    float beta_scale = 1.0f;
+    if (norm_H > 1e-10f && norm_G > 1e-10f) {
+        beta_scale = sqrtf(norm_H / norm_G);
+        beta_scale = fminf(fmaxf(beta_scale, 0.1f), 10.0f);  // Limita entre 0.1 e 10
+        
+        // Aplica escalonamento: Gk *= beta², mantém Hk
+        for (int i = 0; i < stateSize * stateSize; i++) {
+            Gk[i] *= (beta_scale * beta_scale);
+        }
+    }
+
+    // ========================================================================
     // LOOP SDA
     // ========================================================================
     const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
+    
+    // Inicializar histórico de resíduos
+    residualHistoryCount = 0;
+    for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         // W = (I + Gk·Hk)^(-1)
@@ -258,10 +294,24 @@ bool AutoLQR::computeGainMatrixSDA()
         matrixMultiply(AT, Temp3, Temp2, stateSize, stateSize, stateSize);
         matrixAdd(Hk, Temp2, Hk_next, stateSize, stateSize);
         
-        // Verificar convergência
-        float diff = 0;
+        // Verificar convergência usando norma Frobenius relativa
+        float diff = 0.0f;
+        float norm_Hk = 0.0f;
         for (int i = 0; i < stateSize * stateSize; i++) {
-            diff += fabsf(Hk_next[i] - Hk[i]);
+            float d = Hk_next[i] - Hk[i];
+            diff += d * d;
+            norm_Hk += Hk[i] * Hk[i];
+        }
+        diff = sqrtf(diff);
+        norm_Hk = sqrtf(norm_Hk);
+        
+        // Resíduo relativo (como nos outros métodos)
+        float rel_diff = (norm_Hk > 1e-10f) ? (diff / norm_Hk) : diff;
+        
+        // Armazenar resíduo no histórico (primeiras 10 iterações)
+        if (iter < 10) {
+            residualHistory[iter] = rel_diff;
+            residualHistoryCount = iter + 1;
         }
         
         // Atualizar
@@ -269,10 +319,26 @@ bool AutoLQR::computeGainMatrixSDA()
         matrixCopy(Gk_next, Gk, stateSize * stateSize);
         matrixCopy(Hk_next, Hk, stateSize * stateSize);
         
-        if (diff < tolerance) {
+        if (rel_diff < tolerance) {
             converged = true;
+            lastIterations = iter + 1;
+            lastResidual = rel_diff;
             break;
         }
+    }
+    
+    if (!converged) {
+        lastIterations = maxIterations;
+        float diff = 0.0f;
+        float norm_Hk = 0.0f;
+        for (int i = 0; i < stateSize * stateSize; i++) {
+            float d = Hk_next[i] - Hk[i];
+            diff += d * d;
+            norm_Hk += Hk[i] * Hk[i];
+        }
+        diff = sqrtf(diff);
+        norm_Hk = sqrtf(norm_Hk);
+        lastResidual = (norm_Hk > 1e-10f) ? (diff / norm_Hk) : diff;
     }
 
     // P = Hk (solução final)
@@ -568,6 +634,10 @@ bool AutoLQR::computeGainMatrixVanDooren()
     // para obter um pencil (2n)×(2n) antes da decomposição QZ.
     // ========================================================================
     
+    // Van Dooren é método direto - inicializar histórico de resíduos com zeros
+    residualHistoryCount = 1;
+    for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
+    
     if (!A || !B || !Q || !R || !K || !P)
         return false;
 
@@ -809,6 +879,12 @@ bool AutoLQR::computeGainMatrixVanDooren()
     matrixMultiply(term, BT_P_A, K, m, m, n);
 
     // ========================================================================
+    // Van Dooren é método direto (não iterativo)
+    // ========================================================================
+    lastIterations = 1;  // Método direto = 1 "iteração"
+    lastResidual = 0.0f; // Solução direta, sem resíduo iterativo
+
+    // ========================================================================
     // Limpeza
     // ========================================================================
     delete[] BT; delete[] AT;
@@ -993,6 +1069,10 @@ bool AutoLQR::computeGainMatrixIterative()
     const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
+    
+    // Inicializar histórico de resíduos
+    residualHistoryCount = 0;
+    for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         // ================================================================
@@ -1044,10 +1124,30 @@ bool AutoLQR::computeGainMatrixIterative()
         
         float rel_diff = (P_new_norm > 1e-10f) ? (diff / P_new_norm) : diff;
         
+        // Armazenar resíduo no histórico (primeiras 10 iterações)
+        if (iter < 10) {
+            residualHistory[iter] = rel_diff;
+            residualHistoryCount = iter + 1;
+        }
+        
         if (rel_diff < tolerance) {
             converged = true;
+            lastIterations = iter + 1;
+            lastResidual = rel_diff;
             break;
         }
+    }
+    
+    if (!converged) {
+        lastIterations = maxIterations;
+        // Calculate final residual
+        float diff = 0.0f;
+        float P_norm = 0.0f;
+        for (int i = 0; i < nn; i++) {
+            diff += fabsf(P_new[i] - P[i]);
+            P_norm += fabsf(P[i]);
+        }
+        lastResidual = (P_norm > 1e-10f) ? (diff / P_norm) : diff;
     }
 
     // ================================================================
@@ -1109,8 +1209,13 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     const int maxIterations = 100;
     const float tolerance = 1e-8f;
     
-    // Parâmetro de shift - γ ótimo para DARE é tipicamente 1 para sistemas discretos
-    float gamma = 1.0f;
+    // ========================================================================
+    // SDA com Single Shift: Transforma o problema para acelerar convergência
+    // O shift γ transforma autovalores λ → (λ-γ)/(1-γλ)
+    // Escolha ótima: γ próximo ao maior autovalor instável do Hamiltoniano
+    // Para DARE típico, γ = 0.5 a 0.9 funciona bem
+    // ========================================================================
+    float gamma = 0.3f;  // Shift real (não 1.0!)
     bool converged = false;
     float prev_diff = 1e10f;
     
@@ -1130,10 +1235,23 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     float* Temp1 = new float[nn]();
     float* Temp2 = new float[nn]();
     float* Temp3 = new float[nn]();
+    float* I_gamma = new float[nn]();  // Matriz para shift
     
-    // Inicialização
+    // Inicialização com shift aplicado ao sistema
+    // A_shifted = (A - γI)/(1 - γ) para transformar o problema
     matrixCopy(A, Ak, nn);
-    transposeMatrix(A, AT, n, n);
+    
+    // Aplicar shift na matriz A: Ak = A - γ·I (primeira parte da transformação)
+    for (int i = 0; i < n; i++) {
+        Ak[i * n + i] -= gamma;
+    }
+    // Normalizar: Ak = Ak / (1 - γ)
+    float inv_1_minus_gamma = 1.0f / (1.0f - gamma);
+    for (int i = 0; i < nn; i++) {
+        Ak[i] *= inv_1_minus_gamma;
+    }
+    
+    transposeMatrix(Ak, AT, n, n);
     transposeMatrix(B, BT, n, m);
     
     // Calcular R_inv
@@ -1141,21 +1259,26 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     bool init_ok = invertMatrix(R_inv, R_inv, m);
     
     if (init_ok) {
-        // Gk = B * R^(-1) * B'
+        // Gk = B * R^(-1) * B' / (1-γ)²
         float* B_Rinv = new float[n * m];
         matrixMultiply(B, R_inv, B_Rinv, n, m, m);
         matrixMultiply(B_Rinv, BT, Gk, n, m, n);
         delete[] B_Rinv;
         
-        // Hk = Q
+        // Escalar Gk pelo fator do shift
+        float scale_G = inv_1_minus_gamma * inv_1_minus_gamma;
+        for (int i = 0; i < nn; i++) {
+            Gk[i] *= scale_G;
+        }
+        
+        // Hk = Q (sem alteração)
         matrixCopy(Q, Hk, nn);
         
-        // Aplicar shift inicial
-        for (int i = 0; i < nn; i++) {
-            Gk[i] *= (gamma * gamma);
-        }
+        // Inicializar histórico de resíduos
+        residualHistoryCount = 0;
+        for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
-        // Loop SDA com shift
+        // Loop SDA com shift (as iterações são as mesmas, mas sobre sistema transformado)
         for (int iter = 0; iter < maxIterations; iter++) {
             matrixMultiply(Gk, Hk, Temp1, n, n, n);
             for (int i = 0; i < n; i++) {
@@ -1191,13 +1314,12 @@ bool AutoLQR::computeGainMatrixSDA_SS()
             
             float rel_diff = (norm_Hk > 1e-10f) ? (diff / norm_Hk) : diff;
             
-            // Shift adaptativo
-            if (iter > 5 && rel_diff > 0.9f * prev_diff) {
-                gamma *= 0.95f;
-                for (int i = 0; i < nn; i++) {
-                    Gk_next[i] *= 0.9025f;
-                }
+            // Armazenar resíduo no histórico (primeiras 10 iterações)
+            if (iter < 10) {
+                residualHistory[iter] = rel_diff;
+                residualHistoryCount = iter + 1;
             }
+            
             prev_diff = rel_diff;
             
             matrixCopy(Ak_next, Ak, nn);
@@ -1206,8 +1328,23 @@ bool AutoLQR::computeGainMatrixSDA_SS()
             
             if (rel_diff < tolerance) {
                 converged = true;
+                lastIterations = iter + 1;
+                lastResidual = rel_diff;
                 break;
             }
+        }
+        
+        if (!converged) {
+            lastIterations = maxIterations;
+            float diff_final = 0.0f;
+            float norm_Hk_final = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                diff_final += (Hk_next[i] - Hk[i]) * (Hk_next[i] - Hk[i]);
+                norm_Hk_final += Hk[i] * Hk[i];
+            }
+            diff_final = sqrtf(diff_final);
+            norm_Hk_final = sqrtf(norm_Hk_final);
+            lastResidual = (norm_Hk_final > 1e-10f) ? (diff_final / norm_Hk_final) : diff_final;
         }
 
         // P = Hk
@@ -1222,7 +1359,8 @@ bool AutoLQR::computeGainMatrixSDA_SS()
             }
         }
 
-        // Cálculo do ganho K
+        // Cálculo do ganho K usando A ORIGINAL (não a transformada pelo shift)
+        // K = (R + B'·P·B)^(-1) · B'·P·A
         float* BT_P = new float[m * n];
         float* BT_P_B = new float[mm];
         float* BT_P_A = new float[m * n];
@@ -1235,6 +1373,7 @@ bool AutoLQR::computeGainMatrixSDA_SS()
         if (!invertMatrix(R_plus_BTPB, R_plus_BTPB, m)) {
             converged = false;
         } else {
+            // Usa A original, não Ak (que foi transformada pelo shift)
             matrixMultiply(BT_P, A, BT_P_A, m, n, n);
             matrixMultiply(R_plus_BTPB, BT_P_A, K, m, m, n);
         }
@@ -1249,6 +1388,7 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     delete[] Ak_next; delete[] Gk_next; delete[] Hk_next;
     delete[] R_inv; delete[] BT; delete[] AT;
     delete[] W; delete[] Temp1; delete[] Temp2; delete[] Temp3;
+    delete[] I_gamma;
 
     return converged;
 }
@@ -1333,6 +1473,10 @@ bool AutoLQR::computeGainMatrixASDA()
         for (int i = 0; i < nn; i++) {
             Gk[i] *= (beta_k * beta_k);
         }
+        
+        // Inicializar histórico de resíduos
+        residualHistoryCount = 0;
+        for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
         // Loop ASDA
         for (int iter = 0; iter < maxIterations; iter++) {
@@ -1392,14 +1536,36 @@ bool AutoLQR::computeGainMatrixASDA()
             
             float rel_diff = (norm_H_new > 1e-10f) ? (diff / norm_H_new) : diff;
             
+            // Armazenar resíduo no histórico (primeiras 10 iterações)
+            if (iter < 10) {
+                residualHistory[iter] = rel_diff;
+                residualHistoryCount = iter + 1;
+            }
+            
             matrixCopy(Ak_next, Ak, nn);
             matrixCopy(Gk_next, Gk, nn);
             matrixCopy(Hk_next, Hk, nn);
             
             if (rel_diff < tolerance) {
                 converged = true;
+                lastIterations = iter + 1;
+                lastResidual = rel_diff;
                 break;
             }
+        }
+        
+        if (!converged) {
+            lastIterations = maxIterations;
+            float diff_final = 0.0f;
+            float norm_H_final = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                float d = Hk_next[i] - Hk[i];
+                diff_final += d * d;
+                norm_H_final += Hk_next[i] * Hk_next[i];
+            }
+            diff_final = sqrtf(diff_final);
+            norm_H_final = sqrtf(norm_H_final);
+            lastResidual = (norm_H_final > 1e-10f) ? (diff_final / norm_H_final) : diff_final;
         }
 
         // P = Hk
@@ -1543,6 +1709,10 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
                 Hk[i * n + j] = D[i] * Q[i * n + j] * D[j];
             }
         }
+        
+        // Inicializar histórico de resíduos
+        residualHistoryCount = 0;
+        for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
         // Loop SDA escalonado
         for (int iter = 0; iter < maxIterations; iter++) {
@@ -1581,14 +1751,36 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
             
             float rel_diff = (norm_H > 1e-10f) ? (diff / norm_H) : diff;
             
+            // Armazenar resíduo no histórico (primeiras 10 iterações)
+            if (iter < 10) {
+                residualHistory[iter] = rel_diff;
+                residualHistoryCount = iter + 1;
+            }
+            
             matrixCopy(Ak_next, Ak, nn);
             matrixCopy(Gk_next, Gk, nn);
             matrixCopy(Hk_next, Hk, nn);
             
             if (rel_diff < tolerance) {
                 converged = true;
+                lastIterations = iter + 1;
+                lastResidual = rel_diff;
                 break;
             }
+        }
+        
+        if (!converged) {
+            lastIterations = maxIterations;
+            float diff_final = 0.0f;
+            float norm_H_final = 0.0f;
+            for (int i = 0; i < nn; i++) {
+                float d = Hk_next[i] - Hk[i];
+                diff_final += d * d;
+                norm_H_final += Hk_next[i] * Hk_next[i];
+            }
+            diff_final = sqrtf(diff_final);
+            norm_H_final = sqrtf(norm_H_final);
+            lastResidual = (norm_H_final > 1e-10f) ? (diff_final / norm_H_final) : diff_final;
         }
 
         // Recuperar P original: P = D^(-1) * P_scaled * D^(-1)
@@ -1722,6 +1914,10 @@ bool AutoLQR::computeGainMatrixADDA()
     const int maxIterations = 5000;
     const float tolerance = 1e-6f;
     bool converged = false;
+    
+    // Inicializar histórico de resíduos
+    residualHistoryCount = 0;
+    for (int i = 0; i < 10; i++) residualHistory[i] = 0.0f;
 
     for (int iter = 0; iter < maxIterations; iter++) {
         // ================================================================
@@ -1779,6 +1975,12 @@ bool AutoLQR::computeGainMatrixADDA()
         
         float rel_diff = (norm_H > 1e-10f) ? (diff / norm_H) : diff;
         
+        // Armazenar resíduo no histórico (primeiras 10 iterações)
+        if (iter < 10) {
+            residualHistory[iter] = rel_diff;
+            residualHistoryCount = iter + 1;
+        }
+        
         // Atualizar
         matrixCopy(Ak_next, Ak, nn);
         matrixCopy(Gk_next, Gk, nn);
@@ -1786,8 +1988,21 @@ bool AutoLQR::computeGainMatrixADDA()
         
         if (rel_diff < tolerance) {
             converged = true;
+            lastIterations = iter + 1;
+            lastResidual = rel_diff;
             break;
         }
+    }
+    
+    if (!converged) {
+        lastIterations = maxIterations;
+        float diff_final = 0.0f;
+        float norm_H_final = 0.0f;
+        for (int i = 0; i < nn; i++) {
+            diff_final += fabsf(Hk_next[i] - Hk[i]);
+            norm_H_final += fabsf(Hk_next[i]);
+        }
+        lastResidual = (norm_H_final > 1e-10f) ? (diff_final / norm_H_final) : diff_final;
     }
 
     // P = Hk (solução final)
@@ -1840,4 +2055,19 @@ bool AutoLQR::computeGainMatrixADDA()
     delete[] BT_P; delete[] BT_P_B; delete[] BT_P_A; delete[] R_plus_BTPB;
 
     return converged;
+}
+
+int AutoLQR::getLastIterations() const {
+    return lastIterations;
+}
+
+float AutoLQR::getLastResidual() const {
+    return lastResidual;
+}
+
+int AutoLQR::getResidualHistory(float* residuals) const {
+    for (int i = 0; i < 10; i++) {
+        residuals[i] = residualHistory[i];
+    }
+    return residualHistoryCount;
 }
