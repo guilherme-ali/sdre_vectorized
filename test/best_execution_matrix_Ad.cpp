@@ -1,3 +1,9 @@
+/**
+ * TESTE: Avaliação da Melhor Matriz de Execução Ad
+ * 
+ * Testa e compara diferentes solvers DARE usando a matriz discretizada Ad
+ * para encontrar a melhor configuração de execução para o sistema de controle.
+ */
 
 #include <AutoLQR.h>
 #include <math.h>

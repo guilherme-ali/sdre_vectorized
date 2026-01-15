@@ -1,3 +1,10 @@
+/**
+ * TESTE: Validação do Solver DARE
+ * 
+ * Testa a implementação do solver da equação algébrica de Riccati discreta (DARE)
+ * verificando convergência, precisão numérica e comparando com soluções de referência.
+ */
+
 #include <Arduino.h>
 #include "AutoLQR.h"
 #include "MatrixOperations.h"

@@ -1,3 +1,10 @@
+/**
+ * TESTE: Benchmark de Solvers DARE
+ * 
+ * Compara o desempenho de diferentes algoritmos de solução da equação 
+ * algébrica de Riccati discreta (DARE) em termos de tempo de execução, 
+ * número de iterações, resíduos finais e uso de memória.
+ */
 
 #include <AutoLQR.h>
 #include <math.h>

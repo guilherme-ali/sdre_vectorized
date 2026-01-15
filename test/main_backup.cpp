@@ -1,3 +1,11 @@
+/**
+ * TESTE: Backup do Main - Implementação Completa do Sistema
+ * 
+ * Versão backup do código principal contendo a implementação completa do
+ * controle de atitude do drone com sensores, filtros, comunicação WiFi e
+ * controle de motores usando SDRE-LQR.
+ */
+
 #include <AutoLQR.h>
 #include "MPU9250.h"
 #include <MadgwickAHRS.h>
