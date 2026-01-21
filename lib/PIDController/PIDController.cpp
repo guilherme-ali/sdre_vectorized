@@ -4,39 +4,39 @@
 PIDController::PIDController(int stateSize, int controlSize)
     : stateSize(stateSize)
     , controlSize(controlSize)
-    // Default PID gains (conservative values for a small drone)
+    // Ganhos PID padrão (valores conservadores para um drone pequeno)
     , roll_kp(2.0f), roll_ki(0.5f), roll_kd(0.1f)
     , pitch_kp(2.0f), pitch_ki(0.5f), pitch_kd(0.1f)
     , yaw_kp(1.5f), yaw_ki(0.2f), yaw_kd(0.05f)
-    // Initialize integrals
+    // Inicializa integrais
     , roll_integral(0.0f)
     , pitch_integral(0.0f)
     , yaw_integral(0.0f)
-    // Initialize previous errors
+    // Inicializa erros anteriores
     , prev_roll_error(0.0f)
     , prev_pitch_error(0.0f)
     , prev_yaw_error(0.0f)
-    // Initialize filtered derivatives
+    // Inicializa derivadas filtradas
     , filtered_roll_derivative(0.0f)
     , filtered_pitch_derivative(0.0f)
     , filtered_yaw_derivative(0.0f)
-    // Default integral limits
+    // Limites integrais padrão
     , roll_int_limit(1.0f)
     , pitch_int_limit(1.0f)
     , yaw_int_limit(0.5f)
-    // Default output limits
+    // Limites de saída padrão
     , output_min(-10.0f)
     , output_max(10.0f)
-    // State and reference
+    // Estado e referência
     , state(nullptr)
     , reference(nullptr)
-    // Timing
-    , dt(0.012f)  // Default 12ms like main loop
+    // Temporização
+    , dt(0.012f)  // Padrão 12ms como no loop principal
     , first_run(true)
-    // Derivative filter
+    // Filtro derivativo
     , use_derivative_filter(true)
     , derivative_alpha(0.2f)
-    // Current errors
+    // Erros atuais
     , current_roll_error(0.0f)
     , current_pitch_error(0.0f)
     , current_yaw_error(0.0f)
@@ -114,28 +114,28 @@ float PIDController::clampValue(float value, float min_val, float max_val) {
 float PIDController::computeAxisPID(float error, float rate, float& integral,
                                      float& prev_error, float& filtered_derivative,
                                      float kp, float ki, float kd, float int_limit) {
-    // Proportional term
+    // Termo proporcional
     float P = kp * error;
     
-    // Integral term with anti-windup
+    // Termo integral com anti-windup
     integral += error * dt;
     integral = clampValue(integral, -int_limit, int_limit);
     float I = ki * integral;
     
-    // Derivative term
-    // Option 1: Use angular rate directly (more stable)
-    // Option 2: Use error derivative (traditional)
+    // Termo derivativo
+    // Opção 1: Usar taxa angular diretamente (mais estável)
+    // Opção 2: Usar derivada do erro (tradicional)
     float D;
     
     if (first_run) {
         D = 0.0f;
         filtered_derivative = 0.0f;
     } else {
-        // Use angular rate directly for better noise immunity
-        // rate already contains p, q, or r from gyroscope
-        float raw_derivative = -rate; // Negative because we want to oppose the rate
+        // Usa taxa angular diretamente para melhor imunidade a ruído
+        // rate já contém p, q ou r do giroscópio
+        float raw_derivative = -rate; // Negativo porque queremos opor à taxa
         
-        // Apply low-pass filter to derivative if enabled
+        // Aplica filtro passa-baixa na derivada se habilitado
         if (use_derivative_filter) {
             filtered_derivative = derivative_alpha * raw_derivative + 
                                   (1.0f - derivative_alpha) * filtered_derivative;
@@ -147,10 +147,10 @@ float PIDController::computeAxisPID(float error, float rate, float& integral,
     
     prev_error = error;
     
-    // Sum all terms
+    // Soma todos os termos
     float output = P + I + D;
     
-    // Clamp output
+    // Limita a saída
     output = clampValue(output, output_min, output_max);
     
     return output;
@@ -159,30 +159,30 @@ float PIDController::computeAxisPID(float error, float rate, float& integral,
 void PIDController::calculateControl(float* controlOutput) {
     if (!controlOutput || !state || !reference) return;
     
-    // State vector: [roll, pitch, yaw, p, q, r]
+    // Vetor de estados: [roll, pitch, yaw, p, q, r]
     float roll = state[0];
     float pitch = state[1];
     float yaw = state[2];
-    float p = state[3];  // Roll rate
-    float q = state[4];  // Pitch rate
-    float r = state[5];  // Yaw rate
+    float p = state[3];  // Taxa de roll
+    float q = state[4];  // Taxa de pitch
+    float r = state[5];  // Taxa de yaw
     
-    // Reference: [phi_desired, theta_desired, psi_desired]
+    // Referência: [phi_desejado, theta_desejado, psi_desejado]
     float phi_desired = reference[0];
     float theta_desired = reference[1];
     float psi_desired = reference[2];
     
-    // Calculate errors
+    // Calcula erros
     current_roll_error = phi_desired - roll;
     current_pitch_error = theta_desired - pitch;
     current_yaw_error = psi_desired - yaw;
     
-    // Normalize yaw error to [-pi, pi]
+    // Normaliza erro de yaw para [-pi, pi]
     while (current_yaw_error > M_PI) current_yaw_error -= 2.0f * M_PI;
     while (current_yaw_error < -M_PI) current_yaw_error += 2.0f * M_PI;
     
-    // Compute PID for each axis
-    // Output is torque: [tau_roll, tau_pitch, tau_yaw]
+    // Computa PID para cada eixo
+    // Saída é torque: [tau_roll, tau_pitch, tau_yaw]
     controlOutput[0] = computeAxisPID(current_roll_error, p, roll_integral,
                                        prev_roll_error, filtered_roll_derivative,
                                        roll_kp, roll_ki, roll_kd, roll_int_limit);
@@ -256,7 +256,7 @@ void PIDController::getGains(int axis, float& kp, float& ki, float& kd) const {
 
 bool PIDController::setStateMatrix(const float* A) {
     // PID não usa matriz de estados, mas retorna true para compatibilidade
-    (void)A; // Suppress unused parameter warning
+    (void)A; // Suprime aviso de parâmetro não usado
     return true;
 }
 
@@ -299,15 +299,15 @@ bool PIDController::exportGains(float* exportedK) {
         exportedK[i] = 0.0f;
     }
     
-    // Roll controller gains
+    // Ganhos do controlador de Roll
     exportedK[0 * stateSize + 0] = roll_kp;  // K[0,0] = roll_kp (ganho para erro de roll)
     exportedK[0 * stateSize + 3] = roll_kd;  // K[0,3] = roll_kd (ganho para taxa p)
     
-    // Pitch controller gains
+    // Ganhos do controlador de Pitch
     exportedK[1 * stateSize + 1] = pitch_kp; // K[1,1] = pitch_kp (ganho para erro de pitch)
     exportedK[1 * stateSize + 4] = pitch_kd; // K[1,4] = pitch_kd (ganho para taxa q)
     
-    // Yaw controller gains
+    // Ganhos do controlador de Yaw
     exportedK[2 * stateSize + 2] = yaw_kp;   // K[2,2] = yaw_kp (ganho para erro de yaw)
     exportedK[2 * stateSize + 5] = yaw_kd;   // K[2,5] = yaw_kd (ganho para taxa r)
     
