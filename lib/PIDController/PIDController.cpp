@@ -34,7 +34,7 @@ PIDController::PIDController(int stateSize, int controlSize)
     , dt(0.012f)  // Padrão 12ms como no loop principal
     , first_run(true)
     // Filtro derivativo
-    , use_derivative_filter(true)
+    , use_derivative_filter(false)
     , derivative_alpha(0.2f)
     // Erros atuais
     , current_roll_error(0.0f)
