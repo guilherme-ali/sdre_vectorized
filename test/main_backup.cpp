@@ -7,6 +7,7 @@
  */
 
 #include <AutoLQR.h>
+#include "PIDController.h"
 #include "MPU9250.h"
 #include <MadgwickAHRS.h>
 #include "KalmanFilter.h"
@@ -16,6 +17,12 @@
 // Coloque true para ver prints detalhados, false para Serial Plotter
 const bool DEBUG_MODE = true;
 // ==========================
+
+// ===== TIPO DE CONTROLADOR =====
+// 0 = SDRE (State-Dependent Riccati Equation)
+// 1 = PID (Proportional-Integral-Derivative)
+const int CONTROLLER_TYPE = 1;
+// ================================
 
 #include "sensor_config.h" 
 
@@ -94,7 +101,9 @@ float R[CONTROL_SIZE * CONTROL_SIZE] = {
     0, 0, 1,
 };
 
-AutoLQR controller(STATE_SIZE, CONTROL_SIZE);
+// Controladores
+AutoLQR sdreController(STATE_SIZE, CONTROL_SIZE);
+PIDController pidController(STATE_SIZE, CONTROL_SIZE);
 
 // Declaração dos sensores
 #ifdef USE_MPU9250
@@ -254,10 +263,25 @@ void setup()
         }
     }
 
-    // Inicializa o controlador
+    // Inicializa o controlador baseado no tipo selecionado
     updateSystemMatrix(0, 0, 0, 0, 0, 0);
-    controller.setInputMatrix(Bd);
-    controller.setCostMatrices(Q, R);
+    
+    if (CONTROLLER_TYPE == 0) {
+        // SDRE Controller
+        Serial.println("🎯 Controlador: SDRE (State-Dependent Riccati Equation)");
+        sdreController.setInputMatrix(Bd);
+        sdreController.setCostMatrices(Q, R);
+    } else {
+        // PID Controller
+        Serial.println("🎯 Controlador: PID (Proportional-Integral-Derivative)");
+        // Configurar ganhos PID (ajustar conforme necessário)
+        pidController.setRollGains(2.5f, 0.5f, 0.15f);
+        pidController.setPitchGains(2.5f, 0.5f, 0.15f);
+        pidController.setYawGains(1.5f, 0.2f, 0.05f);
+        pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
+        pidController.setOutputLimits(-10.0f, 10.0f);
+        pidController.setSamplingTime(samplingTime);
+    }
 
     filter.begin(1.0f/samplingTime);
     
@@ -374,8 +398,10 @@ void loop(){
     t_matrix = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    // Calcula os ganhos ótimos
-    controller.computeGains();
+    // Calcula os ganhos ótimos (somente para SDRE)
+    if (CONTROLLER_TYPE == 0) {
+        sdreController.computeGains();
+    }
     t_lqr = micros() - t_checkpoint;
     t_checkpoint = micros();
 
@@ -404,13 +430,21 @@ void loop(){
     t_checkpoint = micros();
 
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
-    controller.updateState(x);
-
     float ref[3] = {phi_desired, theta_desired, yaw_desired};
-    controller.updateReference(ref);
-    
     float u[CONTROL_SIZE];
-    controller.calculateControl(u);
+
+    // Calcula controle baseado no tipo de controlador selecionado
+    if (CONTROLLER_TYPE == 0) {
+        // SDRE Controller
+        sdreController.updateState(x);
+        sdreController.updateReference(ref);
+        sdreController.calculateControl(u);
+    } else {
+        // PID Controller
+        pidController.updateState(x);
+        pidController.updateReference(ref);
+        pidController.calculateControl(u);
+    }
 
     // ===== CÁLCULO DOS OMEGA QUADRADOS =====
     float w1_sq, w2_sq, w3_sq, w4_sq;
@@ -553,32 +587,56 @@ void loop(){
                 Serial.println("📡 WiFi: Aguardando conexão...");
             }
 
-            // Exibe a Matriz P (Solução da Equação de Riccati)
-            Serial.println("\n📊 Matriz P (Solução de Riccati):");
-            const float* P_ptr = controller.getRicattiSolution();
-            if (P_ptr) {
-                for (int i = 0; i < STATE_SIZE; i++) {
-                    Serial.print("   | ");
-                    for (int j = 0; j < STATE_SIZE; j++) {
-                        Serial.print(P_ptr[i * STATE_SIZE + j], 4);
-                        if (j < STATE_SIZE - 1) Serial.print("\t");
+            // Exibe a Matriz P (Solução da Equação de Riccati) - apenas para SDRE
+            if (CONTROLLER_TYPE == 0) {
+                Serial.println("\n📊 Matriz P (Solução de Riccati):");
+                const float* P_ptr = sdreController.getRicattiSolution();
+                if (P_ptr) {
+                    for (int i = 0; i < STATE_SIZE; i++) {
+                        Serial.print("   | ");
+                        for (int j = 0; j < STATE_SIZE; j++) {
+                            Serial.print(P_ptr[i * STATE_SIZE + j], 4);
+                            if (j < STATE_SIZE - 1) Serial.print("\t");
+                        }
+                        Serial.println(" |");
                     }
-                    Serial.println(" |");
                 }
-            }
-
-            // Exibe a Matriz K (Ganhos de Controle)
-            Serial.println("\n🎮 Matriz K (Ganhos de Controle):");
-            float K_current[CONTROL_SIZE * STATE_SIZE];
-            if (controller.exportGains(K_current)) {
-                for (int i = 0; i < CONTROL_SIZE; i++) {
-                    Serial.print("   | ");
-                    for (int j = 0; j < STATE_SIZE; j++) {
-                        Serial.print(K_current[i * STATE_SIZE + j], 4);
-                        if (j < STATE_SIZE - 1) Serial.print("\t");
+                
+                // Exibe a Matriz K (Ganhos de Controle) - apenas para SDRE
+                Serial.println("\n🎮 Matriz K (Ganhos de Controle):");
+                float K_current[CONTROL_SIZE * STATE_SIZE];
+                if (sdreController.exportGains(K_current)) {
+                    for (int i = 0; i < CONTROL_SIZE; i++) {
+                        Serial.print("   | ");
+                        for (int j = 0; j < STATE_SIZE; j++) {
+                            Serial.print(K_current[i * STATE_SIZE + j], 4);
+                            if (j < STATE_SIZE - 1) Serial.print("\t");
+                        }
+                        Serial.println(" |");
                     }
-                    Serial.println(" |");
                 }
+            } else {
+                // Para PID, exibe os ganhos de forma mais apropriada
+                Serial.println("\n📊 Ganhos PID:");
+                Serial.println("   Eixo     |   Kp    |   Ki    |   Kd    |");
+                Serial.println("   ---------|---------|---------|---------|");
+                float kp, ki, kd;
+                pidController.getGains(0, kp, ki, kd);  // Roll
+                Serial.printf("   Roll     |  %5.2f  |  %5.2f  |  %5.2f  |\n", kp, ki, kd);
+                pidController.getGains(1, kp, ki, kd);  // Pitch
+                Serial.printf("   Pitch    |  %5.2f  |  %5.2f  |  %5.2f  |\n", kp, ki, kd);
+                pidController.getGains(2, kp, ki, kd);  // Yaw
+                Serial.printf("   Yaw      |  %5.2f  |  %5.2f  |  %5.2f  |\n", kp, ki, kd);
+                
+                Serial.println("\n📈 Estado do PID:");
+                float roll_int, pitch_int, yaw_int;
+                pidController.getIntegrals(roll_int, pitch_int, yaw_int);
+                Serial.printf("   Integrais: Roll=%+.4f  Pitch=%+.4f  Yaw=%+.4f\n", 
+                             roll_int, pitch_int, yaw_int);
+                float roll_err, pitch_err, yaw_err;
+                pidController.getErrors(roll_err, pitch_err, yaw_err);
+                Serial.printf("   Erros:     Roll=%+.4f  Pitch=%+.4f  Yaw=%+.4f\n", 
+                             roll_err, pitch_err, yaw_err);
             }
 
             Serial.println("========================================\n");
@@ -669,7 +727,10 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
         }
     }
 
-    // Atualiza o controlador com a nova matriz de estados
-    controller.setStateMatrix(Ad);
+    // Atualiza o controlador SDRE com a nova matriz de estados
+    // (PID não usa matriz de estados, mas chamamos por compatibilidade)
+    if (CONTROLLER_TYPE == 0) {
+        sdreController.setStateMatrix(Ad);
+    }
 }
 
