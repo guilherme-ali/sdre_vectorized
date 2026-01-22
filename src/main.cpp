@@ -339,10 +339,8 @@ void loop(){
     t_leds = micros() - t_checkpoint;
     t_checkpoint = micros();
     
-    // Verifica bateria crítica - desliga motores se necessário
-    if (leds.isCriticalBattery() && motors.isArmed()) {
-        motors.stopAllMotors();
-        enable_motors = false;
+    // Verifica bateria crítica - apenas atualiza LED (não desarma motores)
+    if (leds.isCriticalBattery()) {
         leds.setLowPower(true);
     } else if (leds.isLowBattery()) {
         leds.setLowPower(true);
