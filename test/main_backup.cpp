@@ -59,7 +59,16 @@ const float Ir = 1.0e-9;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.040;     // 40g
 const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
 float omega_r = 0;
-const float MOTOR_B_COEFF = 2.03e-8;   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²]
+
+// Coeficientes do motor e hélice
+
+// Força máxima TOTAL = 4 motores × 0.59841 N/motor = 2.39364 N
+const float MAX_THRUST_PER_MOTOR = 0.59841f;
+const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 2.39364 N total
+const float MAX_RPM = 51000.0f; // RPM máximo dos motores
+const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // Velocidade angular máxima em rad/s
+
+const float MOTOR_B_COEFF = MAX_THRUST_PER_MOTOR / (MAX_OMEGA * MAX_OMEGA);   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²]
 const float MOTOR_D_COEFF = 0.05 * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²]
 
 // Variáveis para armazenar dados do sensor
@@ -300,7 +309,7 @@ void setup()
     motors.begin();
     motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
     // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
-    motors.setOmegaSqLimits(0, 27500000); // Limite superior de omega² para 50k RPM
+    motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 50k RPM
     
     // Descomentar para calibrar ESCs (fazer apenas uma vez)
     // motors.calibrateESCs();
@@ -407,6 +416,7 @@ void loop(){
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
+    yaw = 0.0f;
 
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
@@ -434,11 +444,10 @@ void loop(){
         const float MAX_ANGLE_RAD = 0.524f;
         const float MAX_YAW_RATE_RAD = 1.57f;
         
-        phi_desired = remote_command.roll * MAX_ANGLE_RAD;
-        theta_desired = remote_command.pitch * MAX_ANGLE_RAD;
-        yaw_desired = remote_command.yaw * MAX_YAW_RATE_RAD;
+        phi_desired = remote_command.roll * DEG_TO_RAD;
+        theta_desired = remote_command.pitch * DEG_TO_RAD;
+        yaw_desired = remote_command.yaw * DEG_TO_RAD;
 
-        const float MAX_THRUST = 0.59841f; // Força máxima em Newtons (100%)
         thrust = (remote_command.thrust / 60000.0f) * MAX_THRUST;
     } else {
         evx = rvx - 0;

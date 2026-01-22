@@ -261,16 +261,15 @@ float MotorControl::omegaSqToThrottle(float omega_sq)
         omega_sq = 0;
     }
     
-    // Mapeia omega² para throttle (0-100%)
-    // Relação: throttle ∝ √(omega²) = omega
-    float omega = sqrt(omega_sq);
+    // Limita ao máximo configurado
+    if (omega_sq > max_omega_sq) {
+        omega_sq = max_omega_sq;
+    }
     
-    // Mapeia linearmente entre os limites
-    float throttle = map(omega * 1000, 
-                         sqrt(min_omega_sq) * 1000, 
-                         sqrt(max_omega_sq) * 1000, 
-                         min_throttle * 10, 
-                         max_throttle * 10) / 10.0;
+    // Mapeia omega² para throttle (0-100%) usando float
+    // Relação linear: throttle = (omega_sq / max_omega_sq) * 100
+    // Não usa sqrt para evitar não-linearidade e simplificar
+    float throttle = (omega_sq / max_omega_sq) * (max_throttle - min_throttle) + min_throttle;
     
     return constrainThrottle(throttle);
 }
