@@ -18,10 +18,15 @@
 const bool DEBUG_MODE = true;
 // ==========================
 
+// ===== FLAG DO MAGNETÔMETRO =====
+// Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
+const bool USE_MAGNETOMETER = false;
+// =================================
+
 // ===== TIPO DE CONTROLADOR =====
 // 0 = SDRE (State-Dependent Riccati Equation)
 // 1 = PID (Proportional-Integral-Derivative)
-const int CONTROLLER_TYPE = 1;
+const int CONTROLLER_TYPE = 0;
 // ================================
 
 #include "sensor_config.h" 
@@ -52,8 +57,9 @@ const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
 const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.0e-9;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.040;     // 40g
+const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
 float omega_r = 0;
-const float MOTOR_B_COEFF = 3.9e-5;   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²] 3.9e-8
+const float MOTOR_B_COEFF = 2.03e-8;   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²]
 const float MOTOR_D_COEFF = 0.05 * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²]
 
 // Variáveis para armazenar dados do sensor
@@ -183,6 +189,7 @@ void onClientConnected() {
 }
 
 void onClientDisconnected() {
+    Serial.println("\n🔴🔴🔴 EVENTO: onClientDisconnected() CHAMADO! 🔴🔴🔴");
     Serial.println("🎮 Controle remoto DESCONECTADO!");
     remote_control_enabled = false;
     enable_motors = false; // Desabilita motores por segurança
@@ -243,13 +250,17 @@ void setup()
         start_IMU_MPU6050(mpu);
     #endif
     
-    // Inicializa o magnetômetro QMC5883L no segundo barramento I2C
-    Serial.println("Inicializando QMC5883L (Magnetômetro)...");
-    start_QMC5883L(Wire1);
-    
-    // Configura calibração do magnetômetro (valores obtidos de test/calibrate_magnetometer.cpp)
-    setQMC5883LCalibration(MAG_OFFSET_X, MAG_OFFSET_Y, MAG_OFFSET_Z,
-                           MAG_SCALE_X, MAG_SCALE_Y, MAG_SCALE_Z);
+    // Inicializa o magnetômetro QMC5883L no segundo barramento I2C (se habilitado)
+    if (USE_MAGNETOMETER) {
+        Serial.println("Inicializando QMC5883L (Magnetômetro)...");
+        start_QMC5883L(Wire1);
+        
+        // Configura calibração do magnetômetro (valores obtidos de test/calibrate_magnetometer.cpp)
+        setQMC5883LCalibration(MAG_OFFSET_X, MAG_OFFSET_Y, MAG_OFFSET_Z,
+                               MAG_SCALE_X, MAG_SCALE_Y, MAG_SCALE_Z);
+    } else {
+        Serial.println("⚠️  Magnetômetro DESABILITADO - usando apenas Accel+Gyro (6-DOF)");
+    }
     
     leds.setSensorsCalibration(false); // Calibração concluída
 
@@ -288,7 +299,8 @@ void setup()
     // Inicializa o sistema de controle de motores
     motors.begin();
     motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
-    motors.setOmegaSqLimits(0, 10000); // Limite superior de omega² ajustado
+    // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
+    motors.setOmegaSqLimits(0, 27500000); // Limite superior de omega² para 50k RPM
     
     // Descomentar para calibrar ESCs (fazer apenas uma vez)
     // motors.calibrateESCs();
@@ -359,8 +371,13 @@ void loop(){
         t_mag = 0; // MPU9250 tem magnetômetro integrado
         t_checkpoint = micros();
         // MPU9250 retorna rad/s, Madgwick espera graus/s
-        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                      ax, ay, az, mx, my, mz);
+        if (USE_MAGNETOMETER) {
+            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                          ax, ay, az, mx, my, mz);
+        } else {
+            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                             ax, ay, az);
+        }
         t_filter = micros() - t_checkpoint;
         t_checkpoint = micros();
     #else
@@ -369,14 +386,21 @@ void loop(){
                      gyro_offset_x, gyro_offset_y, gyro_offset_z);
         t_mpu = micros() - t_checkpoint;
         t_checkpoint = micros();
-        // Lê o magnetômetro QMC5883L
-        read_QMC5883L(mx, my, mz);
-        t_mag = micros() - t_checkpoint;
-        t_checkpoint = micros();
-        // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
-        // Agora usando filter.update() com dados do magnetômetro QMC5883L
-        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                      ax, ay, az, mx, my, mz);
+        
+        // Lê o magnetômetro QMC5883L (se habilitado)
+        if (USE_MAGNETOMETER) {
+            read_QMC5883L(mx, my, mz);
+            t_mag = micros() - t_checkpoint;
+            t_checkpoint = micros();
+            // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
+            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                          ax, ay, az, mx, my, mz);
+        } else {
+            t_mag = 0;
+            // Usa apenas accel+gyro (6-DOF) - sem magnetômetro
+            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                             ax, ay, az);
+        }
         t_filter = micros() - t_checkpoint;
         t_checkpoint = micros();
     #endif
@@ -448,7 +472,7 @@ void loop(){
 
     // ===== CÁLCULO DOS OMEGA QUADRADOS =====
     float w1_sq, w2_sq, w3_sq, w4_sq;
-    calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF,
+    calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
@@ -550,21 +574,25 @@ void loop(){
             Serial.println();
             displayStates(const_cast<float*>(z_measurement));
             
-            // Dados do magnetômetro
-            Serial.println("\n🧭 MAGNETÔMETRO (QMC5883L):");
-            Serial.printf("   Campo Magnético: X=%+.2f  Y=%+.2f  Z=%+.2f μT\n", mx, my, mz);
-            float heading = atan2(my, mx) * RAD_TO_DEG;
-            if (heading < 0) heading += 360.0f;
-            Serial.printf("   Azimute (Heading): %.1f°\n", heading);
-            // Intensidade total do campo magnético
-            float mag_intensity = sqrt(mx*mx + my*my + mz*mz);
-            Serial.printf("   Intensidade Total: %.2f μT\n", mag_intensity);
+            // Dados do magnetômetro (se habilitado)
+            if (USE_MAGNETOMETER) {
+                Serial.println("\n🧭 MAGNETÔMETRO (QMC5883L):");
+                Serial.printf("   Campo Magnético: X=%+.2f  Y=%+.2f  Z=%+.2f μT\n", mx, my, mz);
+                float heading = atan2(my, mx) * RAD_TO_DEG;
+                if (heading < 0) heading += 360.0f;
+                Serial.printf("   Azimute (Heading): %.1f°\n", heading);
+                // Intensidade total do campo magnético
+                float mag_intensity = sqrt(mx*mx + my*my + mz*mz);
+                Serial.printf("   Intensidade Total: %.2f μT\n", mag_intensity);
+            } else {
+                Serial.println("\n🧭 MAGNETÔMETRO: DESABILITADO (6-DOF mode)");
+            }
             
             // Sinais de controle
             displayControlSignals(u, thrust);
             
             // Omega dos motores
-            displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF);
+            displayMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM);
             
             // Valores dos motores
             motors.printMotorValues();

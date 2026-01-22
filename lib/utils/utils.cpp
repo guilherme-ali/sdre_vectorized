@@ -307,36 +307,39 @@ void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az,
 
 // ============= FUNÇÕES DE CÁLCULO DE CONTROLE =============
 
-void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff,
+void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff, float L_arm,
                            float& w1_sq, float& w2_sq, float& w3_sq, float& w4_sq) {
     // Verifica se os coeficientes são válidos
-    if (b_coeff == 0.0f || d_coeff == 0.0f) {
-        Serial.println("ERRO: Coeficientes b ou d não podem ser zero!");
+    if (b_coeff == 0.0f || d_coeff == 0.0f || L_arm == 0.0f) {
+        Serial.println("ERRO: Coeficientes b, d ou L não podem ser zero!");
         w1_sq = w2_sq = w3_sq = w4_sq = 0;
         return;
     }
 
     // Pré-calcula os inversos para otimização
+    // Thrust: T = 4*b*ω² → ω² = T/(4b)
+    // Torque roll/pitch: τ = 2*b*L*ω² → ω² = τ/(2bL)
+    // Torque yaw: τ = 4*d*ω² → ω² = τ/(4d)
     float inv_4b = 1.0f / (4.0f * b_coeff);
-    float inv_2b = 1.0f / (2.0f * b_coeff);
+    float inv_2bL = 1.0f / (2.0f * b_coeff * L_arm);  // CORREÇÃO: inclui L_arm!
     float inv_4d = 1.0f / (4.0f * d_coeff);
 
     // Extrai os sinais de controle
-    float u1 = thrust_signal;    // Empuxo total
-    float u2 = u_torques[0];     // Torque de Rolagem (Roll)
-    float u3 = u_torques[1];     // Torque de Arfagem (Pitch)
-    float u4 = u_torques[2];     // Torque de Guinada (Yaw)
+    float u1 = thrust_signal;    // Empuxo total [N]
+    float u2 = u_torques[0];     // Torque de Rolagem (Roll) [N·m]
+    float u3 = u_torques[1];     // Torque de Arfagem (Pitch) [N·m]
+    float u4 = u_torques[2];     // Torque de Guinada (Yaw) [N·m]
 
-    // Matriz de alocação de controle conforme a imagem:
-    // [ω1²]   [1/(4b)  -1/(2b)   1/(2b)  -1/(4d)] [u1]
-    // [ω2²] = [1/(4b)  -1/(2b)  -1/(2b)   1/(4d)] [u2]
-    // [ω3²]   [1/(4b)   1/(2b)  -1/(2b)  -1/(4d)] [u3]
-    // [ω4²]   [1/(4b)   1/(2b)   1/(2b)   1/(4d)] [u4]
+    // Matriz de alocação de controle (configuração X-quad):
+    // [ω1²]   [1/(4b)  -1/(2bL)   1/(2bL)  -1/(4d)] [u1]
+    // [ω2²] = [1/(4b)  -1/(2bL)  -1/(2bL)   1/(4d)] [u2]
+    // [ω3²]   [1/(4b)   1/(2bL)  -1/(2bL)  -1/(4d)] [u3]
+    // [ω4²]   [1/(4b)   1/(2bL)   1/(2bL)   1/(4d)] [u4]
     
-    w1_sq = u1 * inv_4b - u2 * inv_2b + u3 * inv_2b - u4 * inv_4d;  // Motor 1
-    w2_sq = u1 * inv_4b - u2 * inv_2b - u3 * inv_2b + u4 * inv_4d;  // Motor 2
-    w3_sq = u1 * inv_4b + u2 * inv_2b - u3 * inv_2b - u4 * inv_4d;  // Motor 3
-    w4_sq = u1 * inv_4b + u2 * inv_2b + u3 * inv_2b + u4 * inv_4d;  // Motor 4
+    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 1
+    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 2
+    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 3
+    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 4
 
     // Garante que não há valores negativos (motores não podem girar ao contrário)
     if (w1_sq < 0) w1_sq = 0;
@@ -424,11 +427,11 @@ void displayControlSignals(float u_signal[], float thrust_signal) {
     Serial.print(",T:"); Serial.println(thrust_signal);
 }
 
-void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff) {
+void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff, float L_arm) {
     float w1_sq, w2_sq, w3_sq, w4_sq;
     
     // Usa a função de cálculo
-    calculateMotorOmegaSq(thrust_signal, u_torques, b_coeff, d_coeff,
+    calculateMotorOmegaSq(thrust_signal, u_torques, b_coeff, d_coeff, L_arm,
                           w1_sq, w2_sq, w3_sq, w4_sq);
 
     displayMotorOmegaSqDetailed(w1_sq, w2_sq, w3_sq, w4_sq);
