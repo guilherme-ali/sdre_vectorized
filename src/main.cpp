@@ -437,7 +437,9 @@ void loop(){
         phi_desired = remote_command.roll * MAX_ANGLE_RAD;
         theta_desired = remote_command.pitch * MAX_ANGLE_RAD;
         yaw_desired = remote_command.yaw * MAX_YAW_RATE_RAD;
-        thrust = (remote_command.thrust / 65535.0f) * m * gravity * 2.0f;
+        
+        const float MAX_THRUST = 0.59841f; // Força máxima em Newtons (100%)
+        thrust = (remote_command.thrust / 60000.0f) * MAX_THRUST;
     } else {
         evx = rvx - 0;
         evy = rvy - 0;
@@ -670,6 +672,9 @@ void loop(){
             // Mede o tempo que os prints custaram
             last_print_time = micros() - print_start;
             Serial.printf("⏱️  Tempo dos Prints: %lu μs\n", last_print_time);
+            Serial.printf("========================================\n");
+            Serial.println(remote_command.thrust );
+
             
             prev_ms = micros();
         }
