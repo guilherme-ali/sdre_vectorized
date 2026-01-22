@@ -108,7 +108,7 @@ Mova os joysticks no app. Você verá:
 | Direito  | Roll | 0.0          | +1.0 →        | -1.0 ←        |
 | Direito  | Pitch| 0.0          | +1.0 ⬆        | -1.0 ⬇        |
 | Esquerdo | Yaw  | 0.0          | +1.0 ⟳        | -1.0 ⟲        |
-| Esquerdo | Thrust| 0           | 65535 (100%)   | 0 (0%)         |
+| Esquerdo | Thrust| 0           | 60000 (100%)   | 0 (0%)         |
 
 ## 📊 Teste de Performance
 

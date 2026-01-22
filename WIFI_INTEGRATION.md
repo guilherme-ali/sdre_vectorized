@@ -152,8 +152,8 @@ if (remote_control_enabled && wifiComm.isClientConnected()) {
     theta_desired = remote_command.pitch;   // -1.0 a 1.0
     yaw_desired = remote_command.yaw;       // -1.0 a 1.0
     
-    // Normaliza thrust (0-65535 para 0-100% da força)
-    thrust = (remote_command.thrust / 65535.0f) * m * gravity * 2.0f;
+    // Normaliza thrust (0-60000 para 0-100% da força)
+    thrust = (remote_command.thrust / 60000.0f) * m * gravity * 2.0f;
 }
 ```
 

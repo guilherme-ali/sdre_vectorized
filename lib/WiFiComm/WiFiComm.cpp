@@ -242,7 +242,7 @@ void WiFiComm::processCommanderPacket(uint8_t* buffer, int length) {
         // Thrust
         Serial.print("      Thrust: ");
         Serial.print(_lastCommand.thrust);
-        float percent = (_lastCommand.thrust / 65535.0) * 100;
+        float percent = (_lastCommand.thrust / 60000.0f) * 100;
         Serial.printf(" (%.1f%%) ", percent);
         if (_lastCommand.thrust == 0) Serial.println("⚫ DESLIGADO");
         else if (percent < 30) Serial.println("🟢 BAIXO");

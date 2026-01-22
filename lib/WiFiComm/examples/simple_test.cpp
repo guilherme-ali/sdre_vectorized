@@ -24,7 +24,7 @@ void onCommandReceived(CommanderPacket cmd) {
     Serial.printf("  Roll:   %+.3f\n", cmd.roll);
     Serial.printf("  Pitch:  %+.3f\n", cmd.pitch);
     Serial.printf("  Yaw:    %+.3f\n", cmd.yaw);
-    Serial.printf("  Thrust: %d (%.1f%%)\n", cmd.thrust, (cmd.thrust / 65535.0) * 100);
+    Serial.printf("  Thrust: %d (%.1f%%)\n", cmd.thrust, (cmd.thrust / 60000.0f) * 100);
     Serial.println();
 }
 

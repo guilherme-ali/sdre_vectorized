@@ -339,10 +339,8 @@ void loop(){
     t_leds = micros() - t_checkpoint;
     t_checkpoint = micros();
     
-    // Verifica bateria crítica - desliga motores se necessário
-    if (leds.isCriticalBattery() && motors.isArmed()) {
-        motors.stopAllMotors();
-        enable_motors = false;
+    // Verifica bateria crítica - apenas atualiza LED (não desarma motores)
+    if (leds.isCriticalBattery()) {
         leds.setLowPower(true);
     } else if (leds.isLowBattery()) {
         leds.setLowPower(true);
@@ -439,7 +437,9 @@ void loop(){
         phi_desired = remote_command.roll * MAX_ANGLE_RAD;
         theta_desired = remote_command.pitch * MAX_ANGLE_RAD;
         yaw_desired = remote_command.yaw * MAX_YAW_RATE_RAD;
-        thrust = (remote_command.thrust / 65535.0f) * m * gravity * 2.0f;
+
+        const float MAX_THRUST = 0.59841f; // Força máxima em Newtons (100%)
+        thrust = (remote_command.thrust / 60000.0f) * MAX_THRUST;
     } else {
         evx = rvx - 0;
         evy = rvy - 0;
@@ -560,7 +560,7 @@ void loop(){
                 Serial.printf("     Pitch:  %+.3f\n", remote_command.pitch);
                 Serial.printf("     Yaw:    %+.3f\n", remote_command.yaw);
                 Serial.printf("     Thrust: %d (%.1f%%)\n", remote_command.thrust, 
-                             (remote_command.thrust / 65535.0f) * 100.0f);
+                             (remote_command.thrust / 60000.0f) * 100.0f);
                 Serial.println("   Setpoints (rad):");
                 Serial.printf("     φ_desired: %+.4f\n", phi_desired);
                 Serial.printf("     θ_desired: %+.4f\n", theta_desired);
@@ -672,6 +672,8 @@ void loop(){
             // Mede o tempo que os prints custaram
             last_print_time = micros() - print_start;
             Serial.printf("⏱️  Tempo dos Prints: %lu μs\n", last_print_time);
+            Serial.printf("========================================\n");        
+
             
             prev_ms = micros();
         }

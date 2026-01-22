@@ -82,7 +82,7 @@ struct CommanderPacket {
     float roll;      // -1.0 a 1.0
     float pitch;     // -1.0 a 1.0
     float yaw;       // -1.0 a 1.0
-    uint16_t thrust; // 0 a 65535
+    uint16_t thrust; // 0 a 60000
 };
 ```
 
