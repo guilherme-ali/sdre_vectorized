@@ -26,7 +26,7 @@ const bool USE_MAGNETOMETER = false;
 // ===== TIPO DE CONTROLADOR =====
 // 0 = SDRE (State-Dependent Riccati Equation)
 // 1 = PID (Proportional-Integral-Derivative)
-const int CONTROLLER_TYPE = 0;
+const int CONTROLLER_TYPE = 1;
 // ================================
 
 #include "sensor_config.h" 
@@ -295,9 +295,11 @@ void setup()
         // PID Controller
         Serial.println("🎯 Controlador: PID (Proportional-Integral-Derivative)");
         // Configurar ganhos PID (ajustar conforme necessário)
-        pidController.setRollGains(2.5f, 0.5f, 0.15f);
-        pidController.setPitchGains(2.5f, 0.5f, 0.15f);
-        pidController.setYawGains(1.5f, 0.2f, 0.05f);
+        pidController.setRollGains(0.05f, 0.0f, 0.0f);
+        pidController.setPitchGains(0.05f, 0.0f, 0.0f);
+        pidController.setYawGains(0.01f, 0.0f, 0.0f);
+
+
         pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
         pidController.setOutputLimits(-10.0f, 10.0f);
         pidController.setSamplingTime(samplingTime);
@@ -441,8 +443,6 @@ void loop(){
     float phi_desired, theta_desired, yaw_desired, thrust;
     
     if (remote_control_enabled && wifiComm.isClientConnected()) {
-        const float MAX_ANGLE_RAD = 0.524f;
-        const float MAX_YAW_RATE_RAD = 1.57f;
         
         phi_desired = remote_command.roll * DEG_TO_RAD;
         theta_desired = remote_command.pitch * DEG_TO_RAD;
