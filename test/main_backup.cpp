@@ -12,16 +12,18 @@
 #include <MadgwickAHRS.h>
 #include "KalmanFilter.h"
 #include <Wire.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
 // Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
 const bool USE_MAGNETOMETER = false;
-// =================================
+// =================================  
 
 // ===== TIPO DE CONTROLADOR =====
 // 0 = SDRE (State-Dependent Riccati Equation)
@@ -62,9 +64,9 @@ float omega_r = 0;
 
 // Coeficientes do motor e hélice
 
-// Força máxima TOTAL = 4 motores × 0.59841 N/motor = 2.39364 N
-const float MAX_THRUST_PER_MOTOR = 0.59841f;
-const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 2.39364 N total
+// Força máxima TOTAL = 4 motores × 0.01525 N/motor = 0.061 N
+const float MAX_THRUST_PER_MOTOR = 0.01525f;
+const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 0.061 N total
 const float MAX_RPM = 51000.0f; // RPM máximo dos motores
 const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // Velocidade angular máxima em rad/s
 
@@ -174,6 +176,7 @@ CommanderPacket remote_command;
 // Flags de segurança
 bool enable_motors = false; // Será ativado quando controle conectar
 bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
+bool reset_max_time_on_arm = false; // Flag para resetar maxTime após armar
 
 // Callbacks para comunicação WiFi
 void onRemoteCommandReceived(CommanderPacket cmd) {
@@ -184,6 +187,7 @@ void onRemoteCommandReceived(CommanderPacket cmd) {
     if (!motors_armed_by_remote && !motors.isArmed()) {
         motors.armMotors();
         motors_armed_by_remote = true;
+        reset_max_time_on_arm = true; // Reseta maxTime no próximo loop
         Serial.println("⚡ Motores ARMADOS pelo controle remoto!");
     }
 }
@@ -222,6 +226,9 @@ void onClientDisconnected() {
 
 void setup()
 {
+    // Desabilita o detector de brownout para evitar reset com queda de tensão da bateria
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
     Serial.begin(115200);
     delay(1000);
 
@@ -295,9 +302,11 @@ void setup()
         // PID Controller
         Serial.println("🎯 Controlador: PID (Proportional-Integral-Derivative)");
         // Configurar ganhos PID (ajustar conforme necessário)
-        pidController.setRollGains(2.5f, 0.5f, 0.15f);
-        pidController.setPitchGains(2.5f, 0.5f, 0.15f);
-        pidController.setYawGains(1.5f, 0.2f, 0.05f);
+        pidController.setRollGains(0.05f, 0.05f, 0.0f);
+        pidController.setPitchGains(0.05f, 0.05f, 0.0f);
+        pidController.setYawGains(0.01f, 0.0f, 0.0f);
+
+
         pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
         pidController.setOutputLimits(-10.0f, 10.0f);
         pidController.setSamplingTime(samplingTime);
@@ -441,8 +450,6 @@ void loop(){
     float phi_desired, theta_desired, yaw_desired, thrust;
     
     if (remote_control_enabled && wifiComm.isClientConnected()) {
-        const float MAX_ANGLE_RAD = 0.524f;
-        const float MAX_YAW_RATE_RAD = 1.57f;
         
         phi_desired = remote_command.roll * DEG_TO_RAD;
         theta_desired = remote_command.pitch * DEG_TO_RAD;
@@ -515,8 +522,19 @@ void loop(){
     
     loopCount++;
     totalTime += loopTime;
-    if (loopTime > maxTime && loopTime < 50000) {
+    
+    // Reseta estatísticas após armar motores (ignora pico do armar)
+    if (reset_max_time_on_arm) {
+        maxTime = 0;
+        totalTime = 0;
+        loopCount = 1;
+        reset_max_time_on_arm = false;
+    }
+    
+    bool newMaxTime = false;
+    if (loopTime > maxTime) {
         maxTime = loopTime;
+        newMaxTime = true;
     }
     
     float avgTime = (float)totalTime / loopCount;
@@ -687,13 +705,15 @@ void loop(){
             prev_ms = micros();
         }
     } else {
-        // ===== MODO SERIAL PLOTTER: Apenas tempo =====
-        Serial.print("Atual:");
-        Serial.print(loopTime);
-        Serial.print(",Media:");
-        Serial.print(avgTime, 1);
-        Serial.print(",Max:");
-        Serial.println(maxTime);
+        // ===== MODO SERIAL PLOTTER: Printa apenas quando há novo máximo =====
+        if (newMaxTime) {
+            Serial.print("Atual:");
+            Serial.print(loopTime);
+            Serial.print(",Media:");
+            Serial.print(avgTime, 1);
+            Serial.print(",Max:");
+            Serial.println(maxTime);
+        }
     }
 }
 

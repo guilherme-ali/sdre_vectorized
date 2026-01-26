@@ -26,7 +26,7 @@
 // Limites de segurança
 #define MIN_THROTTLE 0      // 0% (motores parados)
 #define MAX_THROTTLE 100    // 100% (potência máxima)
-#define IDLE_THROTTLE 10    // 10% (idle mínimo para ESC)
+#define IDLE_THROTTLE 1     // 1% (REDUTOS: idle mínimo para evitar brownout)
 
 class MotorControl {
 public:

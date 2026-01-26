@@ -130,8 +130,8 @@ void MotorControl::armMotors()
     Serial.println("ATENÇÃO: Motores vão começar a girar!");
     Serial.println("=========================================");
     
-    // Sequência de armar: enviar sinal mínimo por 2 segundos
-    for(int i = 3; i > 0; i--) {
+    // Sequência de armar: Reduzido para evitar timeout do WiFi
+    for(int i = 1; i > 0; i--) {
         Serial.print("Armando em ");
         Serial.print(i);
         Serial.println(" segundos...");
@@ -144,7 +144,8 @@ void MotorControl::armMotors()
     ledcWrite(MOTOR_3_CHANNEL, throttleToPWM(IDLE_THROTTLE));
     ledcWrite(MOTOR_4_CHANNEL, throttleToPWM(IDLE_THROTTLE));
     
-    delay(2000);
+    // Pequeno delay para estabilização, mas curto para não derrubar conexão
+    delay(500);
     
     armed = true;
     Serial.println("Motores ARMADOS!");
