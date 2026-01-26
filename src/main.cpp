@@ -64,8 +64,8 @@ float omega_r = 0;
 
 // Coeficientes do motor e hélice
 
-// Força máxima TOTAL = 4 motores × 0.01525 N/motor = 0.061 N
-const float MAX_THRUST_PER_MOTOR = 0.01525f;
+// Força máxima TOTAL = 4 motores × 0.01525 Kgf/motor = 0.061 Kgf = 0.598 N
+const float MAX_THRUST_PER_MOTOR = 0.01525f * gravity; // 0.01525 N por motor (15.5g)
 const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 0.061 N total
 const float MAX_RPM = 51000.0f; // RPM máximo dos motores
 const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // Velocidade angular máxima em rad/s
