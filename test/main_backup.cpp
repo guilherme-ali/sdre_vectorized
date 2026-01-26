@@ -176,7 +176,6 @@ CommanderPacket remote_command;
 // Flags de segurança
 bool enable_motors = false; // Será ativado quando controle conectar
 bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
-bool reset_max_time_on_arm = false; // Flag para resetar maxTime após armar
 
 // Callbacks para comunicação WiFi
 void onRemoteCommandReceived(CommanderPacket cmd) {
@@ -187,7 +186,6 @@ void onRemoteCommandReceived(CommanderPacket cmd) {
     if (!motors_armed_by_remote && !motors.isArmed()) {
         motors.armMotors();
         motors_armed_by_remote = true;
-        reset_max_time_on_arm = true; // Reseta maxTime no próximo loop
         Serial.println("⚡ Motores ARMADOS pelo controle remoto!");
     }
 }
@@ -522,15 +520,6 @@ void loop(){
     
     loopCount++;
     totalTime += loopTime;
-    
-    // Reseta estatísticas após armar motores (ignora pico do armar)
-    if (reset_max_time_on_arm) {
-        maxTime = 0;
-        totalTime = 0;
-        loopCount = 1;
-        reset_max_time_on_arm = false;
-    }
-    
     bool newMaxTime = false;
     if (loopTime > maxTime) {
         maxTime = loopTime;
