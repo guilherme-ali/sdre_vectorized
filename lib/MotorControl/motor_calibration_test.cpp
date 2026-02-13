@@ -28,6 +28,7 @@
  * 
  * CÁLCULO:
  *   1. Força medida na balança (gramas) → Newtons: F_N = (gramas/1000) × 9.81
+ * 
  *   2. MOTOR_B_COEFF = F_N / (4 × ω²) (considerando 4 motores iguais)
  * 
  * ========================================================================
@@ -39,19 +40,21 @@
 // ===== CONFIGURAÇÃO DO TESTE =====
 const int THROTTLE_START = 0;      // Throttle inicial (%)
 const int THROTTLE_END = 100;      // Throttle final (%)
-const int THROTTLE_STEP = 5;       // Incremento de throttle (%)
-const bool REVERSE_ORDER = false
-;  // true = fim->início, false = início->fim
-const int STABILIZATION_TIME = 3000; // Tempo de estabilização em ms
+const int THROTTLE_STEP = 1;       // Incremento de throttle (%)
+const bool REVERSE_ORDER = true
+
+;  // true = fim->início, f = início->fim
+const int STABILIZATION_TIME = 10; // Tempo de estabilização em ms
 
 const float GRAVITY = 9.81f;       // Aceleração da gravidade (m/s²)
 
 // Parâmetros do motor 716 Coreless
 // Especificações típicas para motor 716 (7x16mm) coreless
-const float KV_RATING = 14000.0f;  // KV do motor 716 coreless (RPM/Volt)
+const float KV_RATING = 14000.0f;  // KV do motor 716 coreless (RPM/Volt) - SEM CARGA
 const float VOLTAGE = 3.7f;        // Tensão da bateria 1S LiPo (V)
-const float MAX_RPM = KV_RATING * VOLTAGE; // RPM máximo (~52,000 RPM)
-const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // rad/s máximo (~5445 rad/s)
+const float MAX_RPM_NOLOAD = KV_RATING * VOLTAGE; // RPM sem carga (~52,000 RPM)
+const float MAX_RPM = 24000.0f;    // RPM REAL medido com hélice a 100% throttle
+const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // rad/s máximo com carga (~2513 rad/s)
 
 // ===== VARIÁVEIS GLOBAIS =====
 MotorControl motors;
@@ -62,7 +65,10 @@ struct CalibrationData {
     int throttle_percent;
     float force_grams;
     float force_newtons;
-    float omega_sq_total;
+    float measured_rpm;
+    float measured_omega;
+    float omega_sq_total;       // baseado no RPM REAL medido
+    float theoretical_omega_sq; // baseado na fórmula linear (para comparação)
     float calculated_b_coeff;
 };
 
@@ -121,12 +127,12 @@ void printMeasurementPrompt(int throttle) {
 void printStabilized() {
     Serial.println("  ► Estabilizado!");
     Serial.println();
-    Serial.println("  📊 LEIA O VALOR DA BALANÇA (em gramas)");
-    Serial.println("     Digite o valor e pressione ENTER:");
-    Serial.print("     > ");
+    Serial.println("  Pressione ENTER para avançar ao próximo nível...");
 }
 
-void processMeasurement(float force_grams) {
+
+
+void processMeasurement(float force_grams, float measured_rpm) {
     if (measurement_count >= MAX_MEASUREMENTS) {
         Serial.println("❌ Limite de medições atingido!");
         return;
@@ -135,21 +141,34 @@ void processMeasurement(float force_grams) {
     // Converte gramas para Newtons
     float force_newtons = (force_grams / 1000.0f) * GRAVITY;
     
-    // Calcula ω² total (4 motores com mesmo throttle)
-    float omega_sq_single = throttleToOmegaSq(current_throttle);
-    float omega_sq_total = 4.0f * omega_sq_single;
+    // RPM do tacômetro já é o valor correto (verificado: 51k RPM a 100% = esperado)
+    float measured_omega = (measured_rpm * 2.0f * PI) / 60.0f;
     
-    // Calcula MOTOR_B_COEFF para esta medição
+    // ω² baseado no RPM REAL medido (1 motor)
+    float real_omega_sq_single = measured_omega * measured_omega;
+    
+    // Número de motores ativos nesta medição
+    // AJUSTE: mude este valor conforme quantos motores estão ligados
+    const int NUM_ACTIVE_MOTORS = 1; // <<<< AJUSTE AQUI
+    float real_omega_sq_total = (float)NUM_ACTIVE_MOTORS * real_omega_sq_single;
+    
+    // Valor teórico (para comparação)
+    float theoretical_omega_sq = throttleToOmegaSq(current_throttle);
+    
+    // Calcula MOTOR_B_COEFF usando RPM REAL
     float b_coeff = 0;
-    if (omega_sq_total > 0.001f) { // Evita divisão por zero
-        b_coeff = force_newtons / omega_sq_total;
+    if (real_omega_sq_total > 0.001f) {
+        b_coeff = force_newtons / real_omega_sq_total;
     }
     
     // Armazena medição
     measurements[measurement_count].throttle_percent = current_throttle;
     measurements[measurement_count].force_grams = force_grams;
     measurements[measurement_count].force_newtons = force_newtons;
-    measurements[measurement_count].omega_sq_total = omega_sq_total;
+    measurements[measurement_count].measured_rpm = measured_rpm;
+    measurements[measurement_count].measured_omega = measured_omega;
+    measurements[measurement_count].omega_sq_total = real_omega_sq_total;
+    measurements[measurement_count].theoretical_omega_sq = theoretical_omega_sq;
     measurements[measurement_count].calculated_b_coeff = b_coeff;
     measurement_count++;
     
@@ -157,9 +176,12 @@ void processMeasurement(float force_grams) {
     Serial.println();
     Serial.println("  ✅ Medição registrada:");
     Serial.printf("     Força: %.1f g = %.4f N\n", force_grams, force_newtons);
-    Serial.printf("     ω² total: %.2f (rad/s)²\n", omega_sq_total);
-    Serial.printf("     ω por motor: %.1f rad/s\n", sqrt(omega_sq_single));
-    Serial.printf("     B_coeff calculado: %.8f N/(rad/s)²\n", b_coeff);
+    Serial.printf("     RPM medido: %.0f → ω = %.1f rad/s\n", measured_rpm, measured_omega);
+    Serial.printf("     ω² real total (%d motores): %.2f (rad/s)²\n", NUM_ACTIVE_MOTORS, real_omega_sq_total);
+    Serial.printf("     ω² teórico (linear): %.2f (rad/s)²\n", 4.0f * theoretical_omega_sq);
+    Serial.printf("     Desvio teórico vs real: %.1f%%\n", 
+                  ((4.0f * theoretical_omega_sq - real_omega_sq_total) / real_omega_sq_total) * 100.0f);
+    Serial.printf("     ★ B_coeff calculado: %.8f N/(rad/s)²\n", b_coeff);
     Serial.println();
 }
 
@@ -178,21 +200,19 @@ void exportToCSV() {
     Serial.println("===== INÍCIO DOS DADOS CSV =====");
     
     // Cabeçalho CSV
-    Serial.println("Throttle(%),Força(g),Força(N),Omega²_Total(rad/s)²,B_coeff(N/(rad/s)²),Omega_Motor(rad/s),RPM_Motor");
+    Serial.println("Throttle(%),Força(g),Força(N),RPM_Medido,Omega_Medido(rad/s),Omega²_Real_Total(rad/s)²,Omega²_Teorico(rad/s)²,B_coeff(N/(rad/s)²)");
     
     // Dados
     for (int i = 0; i < measurement_count; i++) {
-        float omega_single = sqrt(measurements[i].omega_sq_total / 4.0f);
-        float rpm_single = (omega_single * 60.0f) / (2.0f * PI);
-        
-        Serial.printf("%d,%.2f,%.6f,%.2f,%.10f,%.2f,%.0f\n",
+        Serial.printf("%d,%.2f,%.6f,%.0f,%.2f,%.2f,%.2f,%.10f\n",
                       measurements[i].throttle_percent,
                       measurements[i].force_grams,
                       measurements[i].force_newtons,
+                      measurements[i].measured_rpm,
+                      measurements[i].measured_omega,
                       measurements[i].omega_sq_total,
-                      measurements[i].calculated_b_coeff,
-                      omega_single,
-                      rpm_single);
+                      measurements[i].theoretical_omega_sq * 4.0f,
+                      measurements[i].calculated_b_coeff);
     }
     
     Serial.println("===== FIM DOS DADOS CSV =====");
@@ -208,29 +228,30 @@ void printFinalResults() {
     
     // Tabela de medições
     Serial.println("┌─────────┬───────────┬────────────┬─────────────┬──────────────────┐");
-    Serial.println("│Throttle │  Força    │   Força    │   ω² total  │   B_coeff        │");
-    Serial.println("│   (%)   │   (g)     │    (N)     │  (rad/s)²   │  N/(rad/s)²      │");
-    Serial.println("├─────────┼───────────┼────────────┼─────────────┼──────────────────┤");
+    Serial.println("│Throttle │  Força    │   Força    │ RPM medido  │   ω² real   │   B_coeff        │");
+    Serial.println("│   (%)   │   (g)     │    (N)     │             │  (rad/s)²   │  N/(rad/s)²      │");
+    Serial.println("├─────────┼───────────┼────────────┼─────────────┼─────────────┼──────────────────┤");
     
     float sum_b_coeff = 0;
     int valid_measurements = 0;
     
     for (int i = 0; i < measurement_count; i++) {
-        Serial.printf("│  %3d    │  %7.1f  │  %8.4f  │  %10.2f │  %.10f  │\n",
+        Serial.printf("│  %3d    │  %7.1f  │  %8.4f  │  %9.0f  │  %10.2f │  %.10f  │\n",
                       measurements[i].throttle_percent,
                       measurements[i].force_grams,
                       measurements[i].force_newtons,
+                      measurements[i].measured_rpm,
                       measurements[i].omega_sq_total,
                       measurements[i].calculated_b_coeff);
         
-        // Soma apenas medições válidas (throttle > 0)
-        if (measurements[i].throttle_percent > 0) {
+        // Soma apenas medições válidas (throttle > 0 e RPM > 0)
+        if (measurements[i].throttle_percent > 0 && measurements[i].measured_rpm > 0) {
             sum_b_coeff += measurements[i].calculated_b_coeff;
             valid_measurements++;
         }
     }
     
-    Serial.println("└─────────┴───────────┴────────────┴─────────────┴──────────────────┘");
+    Serial.println("└─────────┴───────────┴────────────┴─────────────┴─────────────┴──────────────────┘");
     Serial.println();
     
     // Calcula média do coeficiente
@@ -358,10 +379,11 @@ void loop() {
             printMeasurementPrompt(current_throttle);
             
             // Define throttle nos 4 motores
-            motors.setMotor1(current_throttle);
-            motors.setMotor2(current_throttle);
+            //motors.setMotor1(current_throttle);
+            //motors.setMotor2(current_throttle);
+            
             motors.setMotor3(current_throttle);
-            motors.setMotor4(current_throttle);
+            //motors.setMotor4(current_throttle);
             
             // Debug: mostra status dos motores
             Serial.print("  ► Status: ");
@@ -386,31 +408,29 @@ void loop() {
             }
         }
     } else {
-        // Aguardando entrada do usuário
+        // Aguardando usuário pressionar ENTER para avançar
         if (Serial.available() > 0) {
-            String input = Serial.readStringUntil('\n');
-            input.trim();
+            // Consome toda a entrada (apenas Enter necessário)
+            while (Serial.available()) Serial.read();
             
-            float force_grams = input.toFloat();
+            Serial.println("  ► Avançando...\n");
             
-            if (force_grams >= 0) {
-                processMeasurement(force_grams);
-                
-                // Para os motores antes da próxima medição (mas mantém armados!)
-                motors.setAllMotors(0);
-                delay(100);
-                
-                // Próximo throttle (crescente ou decrescente)
-                if (REVERSE_ORDER) {
-                    current_throttle -= THROTTLE_STEP;
-                } else {
-                    current_throttle += THROTTLE_STEP;
-                }
-                waiting_for_input = false;
-            } else {
-                Serial.println("❌ Valor inválido! Digite novamente:");
-                Serial.print("     > ");
+            // Para os motores antes da próxima medição (mas mantém armados!)
+            motors.setAllMotors(0);
+            delay(100);
+            
+            // Próximo throttle (crescente ou decrescente)
+            int multiplicador = 1;
+            if (current_throttle >= 30){
+                multiplicador = 2;
             }
+
+            if (REVERSE_ORDER) {
+                current_throttle -= THROTTLE_STEP * multiplicador;
+            } else {
+                current_throttle += THROTTLE_STEP * multiplicador;
+            }
+            waiting_for_input = false;
         }
     }
 }

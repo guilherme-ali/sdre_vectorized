@@ -70,7 +70,7 @@ const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 0.061 N total
 const float MAX_RPM = 51000.0f; // RPM máximo dos motores
 const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // Velocidade angular máxima em rad/s
 
-const float MOTOR_B_COEFF = MAX_THRUST_PER_MOTOR / (MAX_OMEGA * MAX_OMEGA);   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²]
+const float MOTOR_B_COEFF = 9.68e-9;  // Coeficiente de empuxo: T = b*ω² [N/(rad/s)²]
 const float MOTOR_D_COEFF = 0.05 * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²]
 
 // Variáveis para armazenar dados do sensor
