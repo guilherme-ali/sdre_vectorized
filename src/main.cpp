@@ -17,7 +17,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
+const bool DEBUG_MODE = true;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -50,9 +50,9 @@ const int CONTROLLER_TYPE = 0;
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
 #define MEASUREMENT_DIM 6
-#define gravity 9.81f
+#define gravity 9.80665f
 
-void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r);
+void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r, float omega_r);
 
 const float Ixx = 16.57e-6;  // 0.000021 kg·m² (roll)
 const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
@@ -62,16 +62,14 @@ const float m = 0.040;     // 40g
 const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
 float omega_r = 0;
 
-// Coeficientes do motor e hélice
+// Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
 
-// Força máxima TOTAL = 4 motores × 0.01525 Kgf/motor = 0.061 Kgf = 0.598 N
-const float MAX_THRUST_PER_MOTOR = 0.01525f * gravity; // 0.01525 Kgf por motor (15.25g)
-const float MAX_THRUST = 4.0f * MAX_THRUST_PER_MOTOR; // 0.061 N total
-const float MAX_RPM = 51000.0f; // RPM máximo dos motores
-const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // Velocidade angular máxima em rad/s
+const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
+const float MAX_THRUST = 0.475426392f;
+const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // ~3255.3 rad/s
 
-const float MOTOR_B_COEFF = MAX_THRUST_PER_MOTOR / (MAX_OMEGA * MAX_OMEGA);   // Coeficiente de empuxo (thrust): T = b*ω² [N/(rad/s)²]
-const float MOTOR_D_COEFF = 0.05 * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²]
+const float MOTOR_B_COEFF = 1.11e-8f;   // Coeficiente de empuxo MEDIDO (regressão: F = 1.11E-08*ω² - 5.09E-04) [N/(rad/s)²]
+const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²] (estimado)
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az;
@@ -289,7 +287,7 @@ void setup()
     }
 
     // Inicializa o controlador baseado no tipo selecionado
-    updateSystemMatrix(0, 0, 0, 0, 0, 0);
+    updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     
     if (CONTROLLER_TYPE == 0) {
         // SDRE Controller
@@ -316,7 +314,7 @@ void setup()
     motors.begin();
     motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
     // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
-    motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 50k RPM
+    motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 31k RPM (medido)
     
     // Descomentar para calibrar ESCs (fazer apenas uma vez)
     // motors.calibrateESCs();
@@ -433,7 +431,7 @@ void loop(){
     t_angles = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    updateSystemMatrix(roll, pitch, yaw, p, q, r);
+    updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
     t_matrix = micros() - t_checkpoint;
     t_checkpoint = micros();
 
@@ -488,6 +486,9 @@ void loop(){
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
+    // Atualiza omega_r para a próxima iteração (Voos 2006):
+    // omega_r = -ω1 + ω2 - ω3 + ω4  (motores CW: 1,3 / CCW: 2,4)
+    omega_r = -sqrtf(w1_sq) + sqrtf(w2_sq) - sqrtf(w3_sq) + sqrtf(w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
 
@@ -706,7 +707,7 @@ void loop(){
     }
 }
 
-void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r) {
+void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r, float omega_r) {
     // Atualiza a matriz A contínua com as velocidades angulares atuais
     // As três primeiras linhas permanecem constantes
 
