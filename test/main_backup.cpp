@@ -736,7 +736,7 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     A[3 * STATE_SIZE + 5] = (1 - alpha_1) * ((Iyy - Izz) / Ixx) * q;
     
     // Linha 5 (índice 4)
-    A[4 * STATE_SIZE + 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r - Ir * omega_r / Iyy;
+    A[4 * STATE_SIZE + 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r + Ir * omega_r / Iyy;
     A[4 * STATE_SIZE + 5] = (1 - alpha_2) * ((Izz - Ixx) / Iyy) * p;
     
     // Linha 6 (índice 5)
