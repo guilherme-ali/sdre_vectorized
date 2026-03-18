@@ -57,19 +57,20 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
 const float Ixx = 16.57e-6;  // 0.000021 kg·m² (roll)
 const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
 const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
-const float Ir = 1.0e-9;   // 0.000001 kg·m² (inércia do rotor)
+const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.040;     // 40g
 const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
 float omega_r = 0;
 
 // Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
 
-const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
-const float MAX_THRUST = 0.475426392f;
-const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // ~3255.3 rad/s
-
 const float MOTOR_B_COEFF = 1.11e-8f;   // Coeficiente de empuxo MEDIDO (regressão: F = 1.11E-08*ω² - 5.09E-04) [N/(rad/s)²]
 const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²] (estimado)
+
+
+const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
+const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // ~3255.3 rad/s
+const float MAX_THRUST = MOTOR_B_COEFF * MAX_OMEGA * MAX_OMEGA; // Empuxo máximo medido a 100% duty cycle (N)
 
 // Variáveis para armazenar dados do sensor
 float ax, ay, az;
