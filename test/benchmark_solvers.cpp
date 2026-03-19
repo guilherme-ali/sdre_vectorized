@@ -14,7 +14,7 @@
 namespace RiccatiBenchmark {
     const int STATE_SIZE_BENCH = 6;
     const int CONTROL_SIZE_BENCH = 3;
-    const int NUM_ITERATIONS = 10000;
+    const int NUM_ITERATIONS = 400000;
 
     AutoLQR lqr_sda(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
     AutoLQR lqr_sda_ss(STATE_SIZE_BENCH, CONTROL_SIZE_BENCH);
@@ -179,8 +179,89 @@ namespace RiccatiBenchmark {
         lqr_iter.computeGains("ITERATIVE");
         
         Serial.println("Progresso:");
+        unsigned long global_start_time = millis(); // Guarda o tempo de início do benchmark
         int last_percent = -1;
         
+        auto safe_std = [](double M2, int count) -> double {
+            return (count > 0) ? sqrt(M2 / count) : 0.0;
+        };
+        
+        auto get_stats = [](double mean, double M2, int count) -> std::pair<double, double> {
+            double std = (count > 0) ? sqrt(M2 / count) : 0.0;
+            return {mean, std};
+        };
+        
+        auto print_current_tables = [&](int n) {
+            double mean_sda = stats_sda.mean_time;
+            double std_sda = safe_std(stats_sda.M2_time, n);
+            double std_mean_sda = std_sda / sqrt(n);
+            
+            double mean_sda_ss = stats_sda_ss.mean_time;
+            double std_sda_ss = safe_std(stats_sda_ss.M2_time, n);
+            double std_mean_sda_ss = std_sda_ss / sqrt(n);
+            
+            double mean_asda = stats_asda.mean_time;
+            double std_asda = safe_std(stats_asda.M2_time, n);
+            double std_mean_asda = std_asda / sqrt(n);
+            
+            double mean_sda_scaled = stats_sda_scaled.mean_time;
+            double std_sda_scaled = safe_std(stats_sda_scaled.M2_time, n);
+            double std_mean_sda_scaled = std_sda_scaled / sqrt(n);
+            
+            double mean_adda = stats_adda.mean_time;
+            double std_adda = safe_std(stats_adda.M2_time, n);
+            double std_mean_adda = std_adda / sqrt(n);
+            
+            double mean_vd = stats_vd.mean_time;
+            double std_vd = safe_std(stats_vd.M2_time, n);
+            double std_mean_vd = std_vd / sqrt(n);
+            
+            double mean_iter = stats_iter.mean_time;
+            double std_iter = safe_std(stats_iter.M2_time, n);
+            double std_mean_iter = std_iter / sqrt(n);
+            
+            Serial.printf("\n============================= RESULTADOS DO BENCHMARK (%d iterações) ===========================\n", n);
+            Serial.printf("%-15s | %-12s | %-14s | %-15s | %-15s\n", "MÉTODO", "MÉDIA (us)", "PIOR CASO (us)", "DESVIO PAD (us)", "DESVIO PAD MÉDIA");
+            Serial.println("-----------------------------------------------------------------------------------");
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA (orig)", mean_sda, stats_sda.max_time, std_sda, std_mean_sda);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA-ss", mean_sda_ss, stats_sda_ss.max_time, std_sda_ss, std_mean_sda_ss);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ASDA", mean_asda, stats_asda.max_time, std_asda, std_mean_asda);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA Scaled", mean_sda_scaled, stats_sda_scaled.max_time, std_sda_scaled, std_mean_sda_scaled);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ADDA", mean_adda, stats_adda.max_time, std_adda, std_mean_adda);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "VAN DOOREN", mean_vd, stats_vd.max_time, std_vd, std_mean_vd);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ITERATIVE", mean_iter, stats_iter.max_time, std_iter, std_mean_iter);
+            Serial.println("===================================================================================");
+            
+            auto [mean_iters_sda, std_iters_sda] = get_stats(stats_sda.mean_iters, stats_sda.M2_iters, n);
+            auto [mean_iters_sda_ss, std_iters_sda_ss] = get_stats(stats_sda_ss.mean_iters, stats_sda_ss.M2_iters, n);
+            auto [mean_iters_asda, std_iters_asda] = get_stats(stats_asda.mean_iters, stats_asda.M2_iters, n);
+            auto [mean_iters_sda_scaled, std_iters_sda_scaled] = get_stats(stats_sda_scaled.mean_iters, stats_sda_scaled.M2_iters, n);
+            auto [mean_iters_adda, std_iters_adda] = get_stats(stats_adda.mean_iters, stats_adda.M2_iters, n);
+            auto [mean_iters_vd, std_iters_vd] = get_stats(stats_vd.mean_iters, stats_vd.M2_iters, n);
+            auto [mean_iters_iter, std_iters_iter] = get_stats(stats_iter.mean_iters, stats_iter.M2_iters, n);
+            
+            auto [mean_res_sda, std_res_sda] = get_stats(stats_sda.mean_res, stats_sda.M2_res, n);
+            auto [mean_res_sda_ss, std_res_sda_ss] = get_stats(stats_sda_ss.mean_res, stats_sda_ss.M2_res, n);
+            auto [mean_res_asda, std_res_asda] = get_stats(stats_asda.mean_res, stats_asda.M2_res, n);
+            auto [mean_res_sda_scaled, std_res_sda_scaled] = get_stats(stats_sda_scaled.mean_res, stats_sda_scaled.M2_res, n);
+            auto [mean_res_adda, std_res_adda] = get_stats(stats_adda.mean_res, stats_adda.M2_res, n);
+            auto [mean_res_vd, std_res_vd] = get_stats(stats_vd.mean_res, stats_vd.M2_res, n);
+            auto [mean_res_iter, std_res_iter] = get_stats(stats_iter.mean_res, stats_iter.M2_res, n);
+            
+            Serial.println("\n============= TAXA DE CONVERGÊNCIA DOS RESÍDUOS =================");
+            Serial.printf("%-11s | %-8s | %-8s | %-8s | %-10s | %-11s | %-11s | %-11s\n", 
+                          "MÉTODO", "IT MÉDIA", "IT MAX", "IT STD", "IT STD MED", "RES MED", "RES MAX", "RES STD");
+            Serial.println("-----------------------------------------------------------------------------------------------------");
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA (orig)", mean_iters_sda, stats_sda.max_iters, std_iters_sda, std_iters_sda / sqrt(n), mean_res_sda, stats_sda.max_res, std_res_sda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA-ss", mean_iters_sda_ss, stats_sda_ss.max_iters, std_iters_sda_ss, std_iters_sda_ss / sqrt(n), mean_res_sda_ss, stats_sda_ss.max_res, std_res_sda_ss);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ASDA", mean_iters_asda, stats_asda.max_iters, std_iters_asda, std_iters_asda / sqrt(n), mean_res_asda, stats_asda.max_res, std_res_asda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA Scaled", mean_iters_sda_scaled, stats_sda_scaled.max_iters, std_iters_sda_scaled, std_iters_sda_scaled / sqrt(n), mean_res_sda_scaled, stats_sda_scaled.max_res, std_res_sda_scaled);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ADDA", mean_iters_adda, stats_adda.max_iters, std_iters_adda, std_iters_adda / sqrt(n), mean_res_adda, stats_adda.max_res, std_res_adda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "VAN DOOREN", mean_iters_vd, stats_vd.max_iters, std_iters_vd, std_iters_vd / sqrt(n), mean_res_vd, stats_vd.max_res, std_res_vd);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ITERATIVE", mean_iters_iter, stats_iter.max_iters, std_iters_iter, std_iters_iter / sqrt(n), mean_res_iter, stats_iter.max_res, std_res_iter);
+            Serial.println("=====================================================================================================\n");
+        };
+
         for (int i = 0; i < NUM_ITERATIONS; i++) {
             // Atualizar barra de progresso
             int current_percent = (i * 100) / NUM_ITERATIONS;
@@ -219,80 +300,59 @@ namespace RiccatiBenchmark {
             
             size_t heap_before, heap_after;
             
-            // SDA Original
-            lqr_sda.setStateMatrix(Ad_bench);
-            lqr_sda.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            unsigned long t0 = micros();
-            lqr_sda.computeGains("SDA");
-            unsigned long time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_sda.add(time, lqr_sda.getLastIterations(), lqr_sda.getLastResidual(), heap_before - heap_after);
+            // Função lambda para medir o tempo
+            auto measure_solver = [&](AutoLQR& solver, MethodStats& stats, const char* name_id) {
+                solver.setStateMatrix(Ad_bench);
+                solver.setInputMatrix(Bd_bench);
+                heap_before = ESP.getFreeHeap();
+                
+                unsigned long t0 = micros();
+                solver.computeGains(name_id);
+                unsigned long time = micros() - t0;
+                
+                heap_after = ESP.getFreeHeap();
+                stats.add(time, solver.getLastIterations(), solver.getLastResidual(), heap_before - heap_after);
+            };
+
+            measure_solver(lqr_sda, stats_sda, "SDA");
+            measure_solver(lqr_sda_ss, stats_sda_ss, "SDA_SS");
+            measure_solver(lqr_asda, stats_asda, "ASDA");
+            measure_solver(lqr_sda_scaled, stats_sda_scaled, "SDA_SCALED");
+            measure_solver(lqr_adda, stats_adda, "ADDA");
+            measure_solver(lqr_vd, stats_vd, "VAN_DOOREN");
+            measure_solver(lqr_iter, stats_iter, "ITERATIVE");
             
-            // SDA com Single Shift (SDA-ss)
-            lqr_sda_ss.setStateMatrix(Ad_bench);
-            lqr_sda_ss.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_sda_ss.computeGains("SDA_SS");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_sda_ss.add(time, lqr_sda_ss.getLastIterations(), lqr_sda_ss.getLastResidual(), heap_before - heap_after);
+            yield(); // <-- Ponto protegido para Alimentar o Watchdog Timer sem sujar o benchmark
             
-            // ASDA (Adaptive SDA)
-            lqr_asda.setStateMatrix(Ad_bench);
-            lqr_asda.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_asda.computeGains("ASDA");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_asda.add(time, lqr_asda.getLastIterations(), lqr_asda.getLastResidual(), heap_before - heap_after);
-            
-            // SDA Scaled
-            lqr_sda_scaled.setStateMatrix(Ad_bench);
-            lqr_sda_scaled.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_sda_scaled.computeGains("SDA_SCALED");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_sda_scaled.add(time, lqr_sda_scaled.getLastIterations(), lqr_sda_scaled.getLastResidual(), heap_before - heap_after);
-            
-            // ADDA (Alternating-Directional Doubling Algorithm)
-            lqr_adda.setStateMatrix(Ad_bench);
-            lqr_adda.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_adda.computeGains("ADDA");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_adda.add(time, lqr_adda.getLastIterations(), lqr_adda.getLastResidual(), heap_before - heap_after);
-            
-            // VAN_DOOREN
-            lqr_vd.setStateMatrix(Ad_bench);
-            lqr_vd.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_vd.computeGains("VAN_DOOREN");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_vd.add(time, lqr_vd.getLastIterations(), lqr_vd.getLastResidual(), heap_before - heap_after);
-            
-            // ITERATIVE
-            lqr_iter.setStateMatrix(Ad_bench);
-            lqr_iter.setInputMatrix(Bd_bench);
-            heap_before = ESP.getFreeHeap();
-            t0 = micros();
-            lqr_iter.computeGains("ITERATIVE");
-            time = micros() - t0;
-            heap_after = ESP.getFreeHeap();
-            stats_iter.add(time, lqr_iter.getLastIterations(), lqr_iter.getLastResidual(), heap_before - heap_after);
-            // delay(1); // Opcional, reduz o uso de tempo durante simulações grandes
+            // Verifica se precisamos imprimir a parcial a cada 1000 iter (se não for a última)
+            if ((i + 1) % 1000 == 0 && (i + 1) != NUM_ITERATIONS) {
+                // Calcular tempo decorrido
+                unsigned long elapsed_ms = millis() - global_start_time;
+                unsigned long total_sec = elapsed_ms / 1000;
+                int hours = total_sec / 3600;
+                int mins = (total_sec % 3600) / 60;
+                int secs = total_sec % 60;
+                
+                // Como não queremos quebrar a barra de progresso, pulamos uma linha,
+                // imprimimos e depois na próxima iteração a barra volta sozinha
+                Serial.printf("\n\n>>> STATUS PARCIAL (%d iter) - Tempo Decorrido: %02d:%02d:%02d <<<\n", i + 1, hours, mins, secs);
+                print_current_tables(i + 1);
+                last_percent = -1; // Força reescrever a linha de progresso
+            }
         }
         
-        Serial.println("[====================] 100%");
+        Serial.println("\n[==================================================] 100%");
         Serial.println();
+        
+        // RESULTADOS FINAIS
+        unsigned long final_elapsed_ms = millis() - global_start_time;
+        unsigned long final_total_sec = final_elapsed_ms / 1000;
+        int fn_hours = final_total_sec / 3600;
+        int fn_mins = (final_total_sec % 3600) / 60;
+        int fn_secs = final_total_sec % 60;
+        
+        Serial.printf("\n>>> TEMPO TOTAL DECORRIDO: %02d:%02d:%02d <<<\n", fn_hours, fn_mins, fn_secs);
+        print_current_tables(NUM_ITERATIONS);
         
         // Coletar histórico de resíduos da última execução
         lqr_sda.getResidualHistory(res_history_sda);
@@ -302,90 +362,6 @@ namespace RiccatiBenchmark {
         lqr_adda.getResidualHistory(res_history_adda);
         lqr_vd.getResidualHistory(res_history_vd);
         lqr_iter.getResidualHistory(res_history_iter);
-        
-        // Cálculo estatístico para todos os métodos
-        // Função auxiliar para calcular desvio padrão de forma segura usando M2 de Welford
-        auto safe_std = [](double M2, int n) -> double {
-            return (n > 0) ? sqrt(M2 / n) : 0.0;
-        };
-        
-        double mean_sda = stats_sda.mean_time;
-        double std_sda = safe_std(stats_sda.M2_time, NUM_ITERATIONS);
-        double std_mean_sda = std_sda / sqrt(NUM_ITERATIONS);
-        
-        double mean_sda_ss = stats_sda_ss.mean_time;
-        double std_sda_ss = safe_std(stats_sda_ss.M2_time, NUM_ITERATIONS);
-        double std_mean_sda_ss = std_sda_ss / sqrt(NUM_ITERATIONS);
-        
-        double mean_asda = stats_asda.mean_time;
-        double std_asda = safe_std(stats_asda.M2_time, NUM_ITERATIONS);
-        double std_mean_asda = std_asda / sqrt(NUM_ITERATIONS);
-        
-        double mean_sda_scaled = stats_sda_scaled.mean_time;
-        double std_sda_scaled = safe_std(stats_sda_scaled.M2_time, NUM_ITERATIONS);
-        double std_mean_sda_scaled = std_sda_scaled / sqrt(NUM_ITERATIONS);
-        
-        double mean_adda = stats_adda.mean_time;
-        double std_adda = safe_std(stats_adda.M2_time, NUM_ITERATIONS);
-        double std_mean_adda = std_adda / sqrt(NUM_ITERATIONS);
-        
-        double mean_vd = stats_vd.mean_time;
-        double std_vd = safe_std(stats_vd.M2_time, NUM_ITERATIONS);
-        double std_mean_vd = std_vd / sqrt(NUM_ITERATIONS);
-        
-        double mean_iter = stats_iter.mean_time;
-        double std_iter = safe_std(stats_iter.M2_time, NUM_ITERATIONS);
-        double std_mean_iter = std_iter / sqrt(NUM_ITERATIONS);
-        
-        Serial.println("\n============================= RESULTADOS DO BENCHMARK =============================");
-        Serial.printf("%-15s | %-12s | %-14s | %-15s | %-15s\n", "MÉTODO", "MÉDIA (us)", "PIOR CASO (us)", "DESVIO PAD (us)", "DESVIO PAD MÉDIA");
-        Serial.println("-----------------------------------------------------------------------------------");
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA (orig)", mean_sda, stats_sda.max_time, std_sda, std_mean_sda);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA-ss", mean_sda_ss, stats_sda_ss.max_time, std_sda_ss, std_mean_sda_ss);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ASDA", mean_asda, stats_asda.max_time, std_asda, std_mean_asda);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA Scaled", mean_sda_scaled, stats_sda_scaled.max_time, std_sda_scaled, std_mean_sda_scaled);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ADDA", mean_adda, stats_adda.max_time, std_adda, std_mean_adda);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "VAN DOOREN", mean_vd, stats_vd.max_time, std_vd, std_mean_vd);
-        Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ITERATIVE", mean_iter, stats_iter.max_time, std_iter, std_mean_iter);
-        Serial.println("===================================================================================");
-        
-        // ================================================================
-        // TAXA DE CONVERGÊNCIA DOS RESÍDUOS
-        // ================================================================
-        Serial.println("\n============= TAXA DE CONVERGÊNCIA DOS RESÍDUOS =================");
-        
-        auto get_stats = [](double mean, double M2, int n) -> std::pair<double, double> {
-            double std = (n > 0) ? sqrt(M2 / n) : 0.0;
-            return {mean, std};
-        };
-        
-        auto [mean_iters_sda, std_iters_sda] = get_stats(stats_sda.mean_iters, stats_sda.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_sda_ss, std_iters_sda_ss] = get_stats(stats_sda_ss.mean_iters, stats_sda_ss.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_asda, std_iters_asda] = get_stats(stats_asda.mean_iters, stats_asda.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_sda_scaled, std_iters_sda_scaled] = get_stats(stats_sda_scaled.mean_iters, stats_sda_scaled.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_adda, std_iters_adda] = get_stats(stats_adda.mean_iters, stats_adda.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_vd, std_iters_vd] = get_stats(stats_vd.mean_iters, stats_vd.M2_iters, NUM_ITERATIONS);
-        auto [mean_iters_iter, std_iters_iter] = get_stats(stats_iter.mean_iters, stats_iter.M2_iters, NUM_ITERATIONS);
-        
-        auto [mean_res_sda, std_res_sda] = get_stats(stats_sda.mean_res, stats_sda.M2_res, NUM_ITERATIONS);
-        auto [mean_res_sda_ss, std_res_sda_ss] = get_stats(stats_sda_ss.mean_res, stats_sda_ss.M2_res, NUM_ITERATIONS);
-        auto [mean_res_asda, std_res_asda] = get_stats(stats_asda.mean_res, stats_asda.M2_res, NUM_ITERATIONS);
-        auto [mean_res_sda_scaled, std_res_sda_scaled] = get_stats(stats_sda_scaled.mean_res, stats_sda_scaled.M2_res, NUM_ITERATIONS);
-        auto [mean_res_adda, std_res_adda] = get_stats(stats_adda.mean_res, stats_adda.M2_res, NUM_ITERATIONS);
-        auto [mean_res_vd, std_res_vd] = get_stats(stats_vd.mean_res, stats_vd.M2_res, NUM_ITERATIONS);
-        auto [mean_res_iter, std_res_iter] = get_stats(stats_iter.mean_res, stats_iter.M2_res, NUM_ITERATIONS);
-        
-        Serial.printf("%-11s | %-8s | %-8s | %-8s | %-10s | %-11s | %-11s | %-11s\n", 
-                      "MÉTODO", "IT MÉDIA", "IT MAX", "IT STD", "IT STD MED", "RES MED", "RES MAX", "RES STD");
-        Serial.println("-----------------------------------------------------------------------------------------------------");
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA (orig)", mean_iters_sda, stats_sda.max_iters, std_iters_sda, std_iters_sda / sqrt(NUM_ITERATIONS), mean_res_sda, stats_sda.max_res, std_res_sda);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA-ss", mean_iters_sda_ss, stats_sda_ss.max_iters, std_iters_sda_ss, std_iters_sda_ss / sqrt(NUM_ITERATIONS), mean_res_sda_ss, stats_sda_ss.max_res, std_res_sda_ss);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ASDA", mean_iters_asda, stats_asda.max_iters, std_iters_asda, std_iters_asda / sqrt(NUM_ITERATIONS), mean_res_asda, stats_asda.max_res, std_res_asda);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA Scaled", mean_iters_sda_scaled, stats_sda_scaled.max_iters, std_iters_sda_scaled, std_iters_sda_scaled / sqrt(NUM_ITERATIONS), mean_res_sda_scaled, stats_sda_scaled.max_res, std_res_sda_scaled);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ADDA", mean_iters_adda, stats_adda.max_iters, std_iters_adda, std_iters_adda / sqrt(NUM_ITERATIONS), mean_res_adda, stats_adda.max_res, std_res_adda);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "VAN DOOREN", mean_iters_vd, stats_vd.max_iters, std_iters_vd, std_iters_vd / sqrt(NUM_ITERATIONS), mean_res_vd, stats_vd.max_res, std_res_vd);
-        Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ITERATIVE", mean_iters_iter, stats_iter.max_iters, std_iters_iter, std_iters_iter / sqrt(NUM_ITERATIONS), mean_res_iter, stats_iter.max_res, std_res_iter);
-        Serial.println("=====================================================================================================");
         
         // ================================================================
         // HISTÓRICO DE RESÍDUOS (10 PRIMEIRAS ITERAÇÕES)
