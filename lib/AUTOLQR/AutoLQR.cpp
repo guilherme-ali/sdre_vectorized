@@ -255,7 +255,7 @@ bool AutoLQR::computeGainMatrixSDA()
     // ========================================================================
     // LOOP SDA
     // ========================================================================
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-6f;
     bool converged = false;
     
@@ -1066,7 +1066,7 @@ bool AutoLQR::computeGainMatrixIterative()
     transposeMatrix(A, AT, n, n);
     transposeMatrix(B, BT, n, m);
 
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-6f;
     bool converged = false;
     
@@ -1206,7 +1206,7 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     const int m = controlSize;
     const int nn = n * n;
     const int mm = m * m;
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-8f;
     
     // ========================================================================
@@ -1410,7 +1410,7 @@ bool AutoLQR::computeGainMatrixASDA()
     const int m = controlSize;
     const int nn = n * n;
     const int mm = m * m;
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-8f;
     bool converged = false;
     
@@ -1628,7 +1628,7 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
     const int m = controlSize;
     const int nn = n * n;
     const int mm = m * m;
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-8f;
     bool converged = false;
     
@@ -1911,7 +1911,7 @@ bool AutoLQR::computeGainMatrixADDA()
     // ========================================================================
     // LOOP ADDA - Iterações de dobramento com alternância direcional
     // ========================================================================
-    const int maxIterations = 5000;
+    const int maxIterations = 100;
     const float tolerance = 1e-6f;
     bool converged = false;
     
