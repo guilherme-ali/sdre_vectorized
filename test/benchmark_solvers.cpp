@@ -26,6 +26,7 @@ namespace RiccatiBenchmark {
 
     struct MethodStats {
         int count = 0;
+        int failed_count = 0; // Quantas vezes falhou/bateu no máximo de iterações
         
         double mean_time = 0;
         double M2_time = 0;
@@ -42,7 +43,16 @@ namespace RiccatiBenchmark {
         double mean_mem = 0;
         double M2_mem = 0;
 
+        // Limite máximo de iterações permitido
+        int max_iterations_allowed = 100;
+
         void add(double time, double iter, double res, double mem) {
+            // Ignora a contabilidade se for um outlier (demorou muitas iterações)
+            if (iter > max_iterations_allowed) {
+                failed_count++;
+                return;
+            }
+
             count++;
             if (time > max_time) max_time = time;
             if (iter > max_iters) max_iters = iter;
@@ -110,9 +120,9 @@ namespace RiccatiBenchmark {
     };
 
     void updateSystemMatrixBench(float roll, float pitch, float yaw, float p, float q, float r, const float* B_orig) {
-        float alpha_1 = 0.5f;
-        float alpha_2 = 0.5f;
-        float alpha_3 = 0.5f;
+        float l_1 = 1.0f;
+        float alpha_2 = -1.0f;
+        float alpha_3 = 0.0f;
         float sin_roll = sin(roll);
         float cos_roll = cos(roll);
         float cos_pitch = cos(pitch);
@@ -171,6 +181,15 @@ namespace RiccatiBenchmark {
         lqr_adda.setCostMatrices(Q, R);
         lqr_vd.setCostMatrices(Q, R);
         lqr_iter.setCostMatrices(Q, R);
+        
+        // Ajustar limite de iterações para falha
+        stats_sda.max_iterations_allowed = 10;
+        stats_sda_ss.max_iterations_allowed = 10;
+        stats_asda.max_iterations_allowed = 10;
+        stats_sda_scaled.max_iterations_allowed = 10;
+        stats_adda.max_iterations_allowed = 10;
+        stats_iter.max_iterations_allowed = 100;
+
         float roll = 0, pitch = 0, yaw = 0;
         float p = 0, q = 0, r = 0;
         updateSystemMatrixBench(roll, pitch, yaw, p, q, r, B);
@@ -193,72 +212,72 @@ namespace RiccatiBenchmark {
         
         auto print_current_tables = [&](int n) {
             double mean_sda = stats_sda.mean_time;
-            double std_sda = safe_std(stats_sda.M2_time, n);
-            double std_mean_sda = std_sda / sqrt(n);
+            double std_sda = safe_std(stats_sda.M2_time, stats_sda.count);
+            double std_mean_sda = std_sda / sqrt(stats_sda.count);
             
             double mean_sda_ss = stats_sda_ss.mean_time;
-            double std_sda_ss = safe_std(stats_sda_ss.M2_time, n);
-            double std_mean_sda_ss = std_sda_ss / sqrt(n);
+            double std_sda_ss = safe_std(stats_sda_ss.M2_time, stats_sda_ss.count);
+            double std_mean_sda_ss = std_sda_ss / sqrt(stats_sda_ss.count);
             
             double mean_asda = stats_asda.mean_time;
-            double std_asda = safe_std(stats_asda.M2_time, n);
-            double std_mean_asda = std_asda / sqrt(n);
+            double std_asda = safe_std(stats_asda.M2_time, stats_asda.count);
+            double std_mean_asda = std_asda / sqrt(stats_asda.count);
             
             double mean_sda_scaled = stats_sda_scaled.mean_time;
-            double std_sda_scaled = safe_std(stats_sda_scaled.M2_time, n);
-            double std_mean_sda_scaled = std_sda_scaled / sqrt(n);
+            double std_sda_scaled = safe_std(stats_sda_scaled.M2_time, stats_sda_scaled.count);
+            double std_mean_sda_scaled = std_sda_scaled / sqrt(stats_sda_scaled.count);
             
             double mean_adda = stats_adda.mean_time;
-            double std_adda = safe_std(stats_adda.M2_time, n);
-            double std_mean_adda = std_adda / sqrt(n);
+            double std_adda = safe_std(stats_adda.M2_time, stats_adda.count);
+            double std_mean_adda = std_adda / sqrt(stats_adda.count);
             
             double mean_vd = stats_vd.mean_time;
-            double std_vd = safe_std(stats_vd.M2_time, n);
-            double std_mean_vd = std_vd / sqrt(n);
+            double std_vd = safe_std(stats_vd.M2_time, stats_vd.count);
+            double std_mean_vd = std_vd / sqrt(stats_vd.count);
             
             double mean_iter = stats_iter.mean_time;
-            double std_iter = safe_std(stats_iter.M2_time, n);
-            double std_mean_iter = std_iter / sqrt(n);
+            double std_iter = safe_std(stats_iter.M2_time, stats_iter.count);
+            double std_mean_iter = std_iter / sqrt(stats_iter.count);
             
             Serial.printf("\n============================= RESULTADOS DO BENCHMARK (%d iterações) ===========================\n", n);
-            Serial.printf("%-15s | %-12s | %-14s | %-15s | %-15s\n", "MÉTODO", "MÉDIA (us)", "PIOR CASO (us)", "DESVIO PAD (us)", "DESVIO PAD MÉDIA");
-            Serial.println("-----------------------------------------------------------------------------------");
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA (orig)", mean_sda, stats_sda.max_time, std_sda, std_mean_sda);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA-ss", mean_sda_ss, stats_sda_ss.max_time, std_sda_ss, std_mean_sda_ss);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ASDA", mean_asda, stats_asda.max_time, std_asda, std_mean_asda);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "SDA Scaled", mean_sda_scaled, stats_sda_scaled.max_time, std_sda_scaled, std_mean_sda_scaled);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ADDA", mean_adda, stats_adda.max_time, std_adda, std_mean_adda);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "VAN DOOREN", mean_vd, stats_vd.max_time, std_vd, std_mean_vd);
-            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f\n", "ITERATIVE", mean_iter, stats_iter.max_time, std_iter, std_mean_iter);
-            Serial.println("===================================================================================");
+            Serial.printf("%-15s | %-12s | %-14s | %-15s | %-15s | %-10s\n", "MÉTODO", "MÉDIA (us)", "PIOR CASO (us)", "DESVIO PAD (us)", "DESVIO PAD MÉDIA", "FALHAS (MAX_IT)");
+            Serial.println("-------------------------------------------------------------------------------------------------------------");
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "SDA (orig)", mean_sda, stats_sda.max_time, std_sda, std_mean_sda, stats_sda.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "SDA-ss", mean_sda_ss, stats_sda_ss.max_time, std_sda_ss, std_mean_sda_ss, stats_sda_ss.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "ASDA", mean_asda, stats_asda.max_time, std_asda, std_mean_asda, stats_asda.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "SDA Scaled", mean_sda_scaled, stats_sda_scaled.max_time, std_sda_scaled, std_mean_sda_scaled, stats_sda_scaled.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "ADDA", mean_adda, stats_adda.max_time, std_adda, std_mean_adda, stats_adda.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "VAN DOOREN", mean_vd, stats_vd.max_time, std_vd, std_mean_vd, stats_vd.failed_count);
+            Serial.printf("%-15s | %-12.2f | %-14.2f | %-15.2f | %-15.4f | %-10d\n", "ITERATIVE", mean_iter, stats_iter.max_time, std_iter, std_mean_iter, stats_iter.failed_count);
+            Serial.println("=============================================================================================================");
             
-            auto [mean_iters_sda, std_iters_sda] = get_stats(stats_sda.mean_iters, stats_sda.M2_iters, n);
-            auto [mean_iters_sda_ss, std_iters_sda_ss] = get_stats(stats_sda_ss.mean_iters, stats_sda_ss.M2_iters, n);
-            auto [mean_iters_asda, std_iters_asda] = get_stats(stats_asda.mean_iters, stats_asda.M2_iters, n);
-            auto [mean_iters_sda_scaled, std_iters_sda_scaled] = get_stats(stats_sda_scaled.mean_iters, stats_sda_scaled.M2_iters, n);
-            auto [mean_iters_adda, std_iters_adda] = get_stats(stats_adda.mean_iters, stats_adda.M2_iters, n);
-            auto [mean_iters_vd, std_iters_vd] = get_stats(stats_vd.mean_iters, stats_vd.M2_iters, n);
-            auto [mean_iters_iter, std_iters_iter] = get_stats(stats_iter.mean_iters, stats_iter.M2_iters, n);
+            auto [mean_iters_sda, std_iters_sda] = get_stats(stats_sda.mean_iters, stats_sda.M2_iters, stats_sda.count);
+            auto [mean_iters_sda_ss, std_iters_sda_ss] = get_stats(stats_sda_ss.mean_iters, stats_sda_ss.M2_iters, stats_sda_ss.count);
+            auto [mean_iters_asda, std_iters_asda] = get_stats(stats_asda.mean_iters, stats_asda.M2_iters, stats_asda.count);
+            auto [mean_iters_sda_scaled, std_iters_sda_scaled] = get_stats(stats_sda_scaled.mean_iters, stats_sda_scaled.M2_iters, stats_sda_scaled.count);
+            auto [mean_iters_adda, std_iters_adda] = get_stats(stats_adda.mean_iters, stats_adda.M2_iters, stats_adda.count);
+            auto [mean_iters_vd, std_iters_vd] = get_stats(stats_vd.mean_iters, stats_vd.M2_iters, stats_vd.count);
+            auto [mean_iters_iter, std_iters_iter] = get_stats(stats_iter.mean_iters, stats_iter.M2_iters, stats_iter.count);
             
-            auto [mean_res_sda, std_res_sda] = get_stats(stats_sda.mean_res, stats_sda.M2_res, n);
-            auto [mean_res_sda_ss, std_res_sda_ss] = get_stats(stats_sda_ss.mean_res, stats_sda_ss.M2_res, n);
-            auto [mean_res_asda, std_res_asda] = get_stats(stats_asda.mean_res, stats_asda.M2_res, n);
-            auto [mean_res_sda_scaled, std_res_sda_scaled] = get_stats(stats_sda_scaled.mean_res, stats_sda_scaled.M2_res, n);
-            auto [mean_res_adda, std_res_adda] = get_stats(stats_adda.mean_res, stats_adda.M2_res, n);
-            auto [mean_res_vd, std_res_vd] = get_stats(stats_vd.mean_res, stats_vd.M2_res, n);
-            auto [mean_res_iter, std_res_iter] = get_stats(stats_iter.mean_res, stats_iter.M2_res, n);
+            auto [mean_res_sda, std_res_sda] = get_stats(stats_sda.mean_res, stats_sda.M2_res, stats_sda.count);
+            auto [mean_res_sda_ss, std_res_sda_ss] = get_stats(stats_sda_ss.mean_res, stats_sda_ss.M2_res, stats_sda_ss.count);
+            auto [mean_res_asda, std_res_asda] = get_stats(stats_asda.mean_res, stats_asda.M2_res, stats_asda.count);
+            auto [mean_res_sda_scaled, std_res_sda_scaled] = get_stats(stats_sda_scaled.mean_res, stats_sda_scaled.M2_res, stats_sda_scaled.count);
+            auto [mean_res_adda, std_res_adda] = get_stats(stats_adda.mean_res, stats_adda.M2_res, stats_adda.count);
+            auto [mean_res_vd, std_res_vd] = get_stats(stats_vd.mean_res, stats_vd.M2_res, stats_vd.count);
+            auto [mean_res_iter, std_res_iter] = get_stats(stats_iter.mean_res, stats_iter.M2_res, stats_iter.count);
             
             Serial.println("\n============= TAXA DE CONVERGÊNCIA DOS RESÍDUOS =================");
             Serial.printf("%-11s | %-8s | %-8s | %-8s | %-10s | %-11s | %-11s | %-11s\n", 
                           "MÉTODO", "IT MÉDIA", "IT MAX", "IT STD", "IT STD MED", "RES MED", "RES MAX", "RES STD");
             Serial.println("-----------------------------------------------------------------------------------------------------");
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA (orig)", mean_iters_sda, stats_sda.max_iters, std_iters_sda, std_iters_sda / sqrt(n), mean_res_sda, stats_sda.max_res, std_res_sda);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA-ss", mean_iters_sda_ss, stats_sda_ss.max_iters, std_iters_sda_ss, std_iters_sda_ss / sqrt(n), mean_res_sda_ss, stats_sda_ss.max_res, std_res_sda_ss);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ASDA", mean_iters_asda, stats_asda.max_iters, std_iters_asda, std_iters_asda / sqrt(n), mean_res_asda, stats_asda.max_res, std_res_asda);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA Scaled", mean_iters_sda_scaled, stats_sda_scaled.max_iters, std_iters_sda_scaled, std_iters_sda_scaled / sqrt(n), mean_res_sda_scaled, stats_sda_scaled.max_res, std_res_sda_scaled);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ADDA", mean_iters_adda, stats_adda.max_iters, std_iters_adda, std_iters_adda / sqrt(n), mean_res_adda, stats_adda.max_res, std_res_adda);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "VAN DOOREN", mean_iters_vd, stats_vd.max_iters, std_iters_vd, std_iters_vd / sqrt(n), mean_res_vd, stats_vd.max_res, std_res_vd);
-            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ITERATIVE", mean_iters_iter, stats_iter.max_iters, std_iters_iter, std_iters_iter / sqrt(n), mean_res_iter, stats_iter.max_res, std_res_iter);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA (orig)", mean_iters_sda, stats_sda.max_iters, std_iters_sda, std_iters_sda / sqrt(stats_sda.count), mean_res_sda, stats_sda.max_res, std_res_sda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA-ss", mean_iters_sda_ss, stats_sda_ss.max_iters, std_iters_sda_ss, std_iters_sda_ss / sqrt(stats_sda_ss.count), mean_res_sda_ss, stats_sda_ss.max_res, std_res_sda_ss);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ASDA", mean_iters_asda, stats_asda.max_iters, std_iters_asda, std_iters_asda / sqrt(stats_asda.count), mean_res_asda, stats_asda.max_res, std_res_asda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "SDA Scaled", mean_iters_sda_scaled, stats_sda_scaled.max_iters, std_iters_sda_scaled, std_iters_sda_scaled / sqrt(stats_sda_scaled.count), mean_res_sda_scaled, stats_sda_scaled.max_res, std_res_sda_scaled);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ADDA", mean_iters_adda, stats_adda.max_iters, std_iters_adda, std_iters_adda / sqrt(stats_adda.count), mean_res_adda, stats_adda.max_res, std_res_adda);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "VAN DOOREN", mean_iters_vd, stats_vd.max_iters, std_iters_vd, std_iters_vd / sqrt(stats_vd.count), mean_res_vd, stats_vd.max_res, std_res_vd);
+            Serial.printf("%-11s | %-8.2f | %-8.0f | %-8.2f | %-10.4f | %-11.2e | %-11.2e | %-11.2e\n", "ITERATIVE", mean_iters_iter, stats_iter.max_iters, std_iters_iter, std_iters_iter / sqrt(stats_iter.count), mean_res_iter, stats_iter.max_res, std_res_iter);
             Serial.println("=====================================================================================================\n");
         };
 
@@ -400,13 +419,13 @@ namespace RiccatiBenchmark {
         // ================================================================
         Serial.println("\n============== USO DE MEMÓRIA HEAP POR MÉTODO ==================");
         
-        auto [mean_mem_sda, std_mem_sda] = get_stats(stats_sda.mean_mem, stats_sda.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_sda_ss, std_mem_sda_ss] = get_stats(stats_sda_ss.mean_mem, stats_sda_ss.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_asda, std_mem_asda] = get_stats(stats_asda.mean_mem, stats_asda.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_sda_scaled, std_mem_sda_scaled] = get_stats(stats_sda_scaled.mean_mem, stats_sda_scaled.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_adda, std_mem_adda] = get_stats(stats_adda.mean_mem, stats_adda.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_vd, std_mem_vd] = get_stats(stats_vd.mean_mem, stats_vd.M2_mem, NUM_ITERATIONS);
-        auto [mean_mem_iter, std_mem_iter] = get_stats(stats_iter.mean_mem, stats_iter.M2_mem, NUM_ITERATIONS);
+        auto [mean_mem_sda, std_mem_sda] = get_stats(stats_sda.mean_mem, stats_sda.M2_mem, stats_sda.count);
+        auto [mean_mem_sda_ss, std_mem_sda_ss] = get_stats(stats_sda_ss.mean_mem, stats_sda_ss.M2_mem, stats_sda_ss.count);
+        auto [mean_mem_asda, std_mem_asda] = get_stats(stats_asda.mean_mem, stats_asda.M2_mem, stats_asda.count);
+        auto [mean_mem_sda_scaled, std_mem_sda_scaled] = get_stats(stats_sda_scaled.mean_mem, stats_sda_scaled.M2_mem, stats_sda_scaled.count);
+        auto [mean_mem_adda, std_mem_adda] = get_stats(stats_adda.mean_mem, stats_adda.M2_mem, stats_adda.count);
+        auto [mean_mem_vd, std_mem_vd] = get_stats(stats_vd.mean_mem, stats_vd.M2_mem, stats_vd.count);
+        auto [mean_mem_iter, std_mem_iter] = get_stats(stats_iter.mean_mem, stats_iter.M2_mem, stats_iter.count);
         
         Serial.printf("%-15s | %-18s | %-18s\n", "MÉTODO", "MEM MÉDIA (bytes)", "MEM STD (bytes)");
         Serial.println("---------------------------------------------------------------------------");
