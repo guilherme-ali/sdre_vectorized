@@ -1103,12 +1103,13 @@ bool AutoLQR::computeGainMatrixIterative()
         matrixMultiply(ATPB, K_temp, correction, n, m, n);
         
         float diff = 0.0f;
-        float P_new_norm = 0.0f;
+        float P_norm = 0.0f;
         
         for (int i = 0; i < nn; i++) {
             P_new[i] = Q[i] + ATPA[i] - correction[i];
-            diff += fabsf(P_new[i] - P[i]);
-            P_new_norm += fabsf(P_new[i]);
+            float d = P_new[i] - P[i];
+            diff += d * d;
+            P_norm += P[i] * P[i];
         }
         
         // Forçar simetria
@@ -1121,8 +1122,10 @@ bool AutoLQR::computeGainMatrixIterative()
         }
         
         matrixCopy(P_new, P, nn);
-        
-        float rel_diff = (P_new_norm > 1e-10f) ? (diff / P_new_norm) : diff;
+
+        diff = sqrtf(diff);
+        P_norm = sqrtf(P_norm);
+        float rel_diff = (P_norm > 1e-10f) ? (diff / P_norm) : diff;
         
         // Armazenar resíduo no histórico (primeiras 10 iterações)
         if (iter < 10) {
@@ -1144,9 +1147,12 @@ bool AutoLQR::computeGainMatrixIterative()
         float diff = 0.0f;
         float P_norm = 0.0f;
         for (int i = 0; i < nn; i++) {
-            diff += fabsf(P_new[i] - P[i]);
-            P_norm += fabsf(P[i]);
+            float d = P_new[i] - P[i];
+            diff += d * d;
+            P_norm += P[i] * P[i];
         }
+        diff = sqrtf(diff);
+        P_norm = sqrtf(P_norm);
         lastResidual = (P_norm > 1e-10f) ? (diff / P_norm) : diff;
     }
 
@@ -1965,14 +1971,17 @@ bool AutoLQR::computeGainMatrixADDA()
         matrixMultiply(AT, Temp3, Temp2, n, n, n);
         matrixAdd(Hk, Temp2, Hk_next, n, n);
         
-        // Verificar convergência
+        // Verificar convergência usando norma de Frobenius relativa
         float diff = 0.0f;
         float norm_H = 0.0f;
         for (int i = 0; i < nn; i++) {
-            diff += fabsf(Hk_next[i] - Hk[i]);
-            norm_H += fabsf(Hk_next[i]);
+            float d = Hk_next[i] - Hk[i];
+            diff += d * d;
+            norm_H += Hk[i] * Hk[i];
         }
-        
+        diff = sqrtf(diff);
+        norm_H = sqrtf(norm_H);
+
         float rel_diff = (norm_H > 1e-10f) ? (diff / norm_H) : diff;
         
         // Armazenar resíduo no histórico (primeiras 10 iterações)
@@ -1999,9 +2008,12 @@ bool AutoLQR::computeGainMatrixADDA()
         float diff_final = 0.0f;
         float norm_H_final = 0.0f;
         for (int i = 0; i < nn; i++) {
-            diff_final += fabsf(Hk_next[i] - Hk[i]);
-            norm_H_final += fabsf(Hk_next[i]);
+            float d = Hk_next[i] - Hk[i];
+            diff_final += d * d;
+            norm_H_final += Hk[i] * Hk[i];
         }
+        diff_final = sqrtf(diff_final);
+        norm_H_final = sqrtf(norm_H_final);
         lastResidual = (norm_H_final > 1e-10f) ? (diff_final / norm_H_final) : diff_final;
     }
 
