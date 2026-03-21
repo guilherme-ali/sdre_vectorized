@@ -120,7 +120,7 @@ namespace RiccatiBenchmark {
     };
 
     void updateSystemMatrixBench(float roll, float pitch, float yaw, float p, float q, float r, const float* B_orig) {
-        float l_1 = 1.0f;
+        float alpha_1 = 1.0f;
         float alpha_2 = -1.0f;
         float alpha_3 = 0.0f;
         float sin_roll = sin(roll);
