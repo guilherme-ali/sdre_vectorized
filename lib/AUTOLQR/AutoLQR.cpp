@@ -1207,7 +1207,7 @@ bool AutoLQR::computeGainMatrixSDA_SS()
     const int nn = n * n;
     const int mm = m * m;
     const int maxIterations = 100;
-    const float tolerance = 1e-8f;
+    const float tolerance = 1e-6f;
     
     // ========================================================================
     // SDA com Single Shift: Transforma o problema para acelerar convergência
@@ -1411,7 +1411,7 @@ bool AutoLQR::computeGainMatrixASDA()
     const int nn = n * n;
     const int mm = m * m;
     const int maxIterations = 100;
-    const float tolerance = 1e-8f;
+    const float tolerance = 1e-6f;
     bool converged = false;
     
     // Alocação de memória
@@ -1629,7 +1629,7 @@ bool AutoLQR::computeGainMatrixSDA_Scaled()
     const int nn = n * n;
     const int mm = m * m;
     const int maxIterations = 100;
-    const float tolerance = 1e-8f;
+    const float tolerance = 1e-6f;
     bool converged = false;
     
     // Alocação de memória
