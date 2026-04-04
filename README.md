@@ -150,10 +150,6 @@ python matriz_otima/busca_parametros_otimos_sdre.py
 
 Contribuições são bem-vindas! Por favor, abra uma issue para discussão antes de submeter PRs significativos.
 
-## 📄 Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para detalhes.
-
 ## 📞 Contato
 
 Para dúvidas ou sugestões, abra uma issue no repositório.
