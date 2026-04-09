@@ -67,7 +67,7 @@ static constexpr float I_JIG[3][3] = {
 // ======== Configuracao do experimento ========
 static constexpr float MASS_EST_KG = 0.040f;
 static constexpr float G = 9.80665f;
-static constexpr float BASE_THRUST_N = MASS_EST_KG * G * 0.95f;  // Mantem motores em regime
+static constexpr float BASE_THRUST_N = 2.0f * MOTOR_B_COEFF * MAX_OMEGA_SQ; // Meio exato da faixa [Tmin, Tmax]
 
 static constexpr float TAU_ROLL_AMP = 3.5e-4f;   // N.m
 static constexpr float TAU_PITCH_AMP = 3.5e-4f;  // N.m
