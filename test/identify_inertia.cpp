@@ -45,6 +45,24 @@ static constexpr float MAX_RPM = 31086.0f;
 static constexpr float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f;
 static constexpr float MAX_OMEGA_SQ = MAX_OMEGA * MAX_OMEGA;
 
+// Tensor de inercia medido do JIG (kg.m^2).
+// Inclui termos cruzados completos: Ixy/Iyx, Ixz/Izx e Iyz/Izy.
+static constexpr float I_JIG_XX =  6.391e-4f;
+static constexpr float I_JIG_XY =  3.3998e-8f;
+static constexpr float I_JIG_XZ = -5.5664e-7f;
+static constexpr float I_JIG_YX =  3.3998e-8f;
+static constexpr float I_JIG_YY =  8.365e-4f;
+static constexpr float I_JIG_YZ =  3.03228e-7f;
+static constexpr float I_JIG_ZX = -5.5664e-7f;
+static constexpr float I_JIG_ZY =  3.03228e-7f;
+static constexpr float I_JIG_ZZ =  9.776e-4f;
+
+static constexpr float I_JIG[3][3] = {
+    {I_JIG_XX, I_JIG_XY, I_JIG_XZ},
+    {I_JIG_YX, I_JIG_YY, I_JIG_YZ},
+    {I_JIG_ZX, I_JIG_ZY, I_JIG_ZZ}
+};
+
 // ======== Configuracao do experimento ========
 static constexpr float MASS_EST_KG = 0.040f;
 static constexpr float G = 9.80665f;
@@ -147,6 +165,28 @@ inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
+}
+
+void computeJigInertialTorqueComp(float p, float q, float r,
+                                  float pdot, float qdot, float rdot,
+                                  float& tau_jig_roll,
+                                  float& tau_jig_pitch,
+                                  float& tau_jig_yaw) {
+    const float j_alpha_x = I_JIG[0][0] * pdot + I_JIG[0][1] * qdot + I_JIG[0][2] * rdot;
+    const float j_alpha_y = I_JIG[1][0] * pdot + I_JIG[1][1] * qdot + I_JIG[1][2] * rdot;
+    const float j_alpha_z = I_JIG[2][0] * pdot + I_JIG[2][1] * qdot + I_JIG[2][2] * rdot;
+
+    const float j_w_x = I_JIG[0][0] * p + I_JIG[0][1] * q + I_JIG[0][2] * r;
+    const float j_w_y = I_JIG[1][0] * p + I_JIG[1][1] * q + I_JIG[1][2] * r;
+    const float j_w_z = I_JIG[2][0] * p + I_JIG[2][1] * q + I_JIG[2][2] * r;
+
+    const float wx_jw_x = q * j_w_z - r * j_w_y;
+    const float wx_jw_y = r * j_w_x - p * j_w_z;
+    const float wx_jw_z = p * j_w_y - q * j_w_x;
+
+    tau_jig_roll = j_alpha_x + wx_jw_x;
+    tau_jig_pitch = j_alpha_y + wx_jw_y;
+    tau_jig_yaw = j_alpha_z + wx_jw_z;
 }
 
 bool initStorage() {
@@ -622,6 +662,7 @@ IdentificationSummary runIdentification() {
     }
 
     Serial.println("Warm-up concluido.");
+    Serial.println("Compensacao de inercia do JIG ativa (tensor completo com termos cruzados).");
     Serial.println("Executando excitacao para identificacao...");
 
     uint32_t ident_start = millis();
@@ -668,9 +709,20 @@ IdentificationSummary runIdentification() {
                                (fabsf(rdot) < MAX_VALID_ACCEL);
 
             if (valid_rates && valid_accel) {
-                const float phi_p[3] = {tau_roll, q_f * r_f, -cmd.omega_r * q_f};
-                const float phi_q[3] = {tau_pitch, p_f * r_f,  cmd.omega_r * p_f};
-                const float phi_r[2] = {tau_yaw, p_f * q_f};
+                float tau_jig_roll = 0.0f;
+                float tau_jig_pitch = 0.0f;
+                float tau_jig_yaw = 0.0f;
+                computeJigInertialTorqueComp(p_f, q_f, r_f,
+                                             pdot, qdot, rdot,
+                                             tau_jig_roll, tau_jig_pitch, tau_jig_yaw);
+
+                const float tau_roll_eff = tau_roll - tau_jig_roll;
+                const float tau_pitch_eff = tau_pitch - tau_jig_pitch;
+                const float tau_yaw_eff = tau_yaw - tau_jig_yaw;
+
+                const float phi_p[3] = {tau_roll_eff, q_f * r_f, -cmd.omega_r * q_f};
+                const float phi_q[3] = {tau_pitch_eff, p_f * r_f,  cmd.omega_r * p_f};
+                const float phi_r[2] = {tau_yaw_eff, p_f * q_f};
 
                 model_p.add(phi_p, pdot);
                 model_q.add(phi_q, qdot);
@@ -813,7 +865,7 @@ IdentificationSummary runIdentification() {
     Serial.print("  Pitch (qdot): "); Serial.println(r2_q, 4);
     Serial.print("  Yaw   (rdot): "); Serial.println(r2_r, 4);
 
-    Serial.println("\nMomentos de inercia estimados:");
+    Serial.println("\nMomentos de inercia estimados (drone, com compensacao do JIG):");
     Serial.print("  Ixx = "); Serial.print(Ixx, 9); Serial.println(" kg.m^2");
     Serial.print("  Iyy = "); Serial.print(Iyy, 9); Serial.println(" kg.m^2");
     Serial.print("  Izz = "); Serial.print(Izz, 9); Serial.println(" kg.m^2");
