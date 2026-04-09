@@ -21,6 +21,7 @@
 
 #include "MotorControl.h"
 #include "sensor_config.h"
+#include "MatrixOperations.h"
 
 #ifdef USE_MPU6050
 #include <Adafruit_MPU6050.h>
@@ -172,21 +173,22 @@ void computeJigInertialTorqueComp(float p, float q, float r,
                                   float& tau_jig_roll,
                                   float& tau_jig_pitch,
                                   float& tau_jig_yaw) {
-    const float j_alpha_x = I_JIG[0][0] * pdot + I_JIG[0][1] * qdot + I_JIG[0][2] * rdot;
-    const float j_alpha_y = I_JIG[1][0] * pdot + I_JIG[1][1] * qdot + I_JIG[1][2] * rdot;
-    const float j_alpha_z = I_JIG[2][0] * pdot + I_JIG[2][1] * qdot + I_JIG[2][2] * rdot;
+    const float omega[3] = {p, q, r};
+    const float omega_dot[3] = {pdot, qdot, rdot};
 
-    const float j_w_x = I_JIG[0][0] * p + I_JIG[0][1] * q + I_JIG[0][2] * r;
-    const float j_w_y = I_JIG[1][0] * p + I_JIG[1][1] * q + I_JIG[1][2] * r;
-    const float j_w_z = I_JIG[2][0] * p + I_JIG[2][1] * q + I_JIG[2][2] * r;
+    float j_alpha[3] = {0.0f, 0.0f, 0.0f};
+    float j_w[3] = {0.0f, 0.0f, 0.0f};
+    float wx_jw[3] = {0.0f, 0.0f, 0.0f};
+    float tau_jig[3] = {0.0f, 0.0f, 0.0f};
 
-    const float wx_jw_x = q * j_w_z - r * j_w_y;
-    const float wx_jw_y = r * j_w_x - p * j_w_z;
-    const float wx_jw_z = p * j_w_y - q * j_w_x;
+    MatrixOperations::matrixVectorMultiply(&I_JIG[0][0], omega_dot, j_alpha, 3, 3);
+    MatrixOperations::matrixVectorMultiply(&I_JIG[0][0], omega, j_w, 3, 3);
+    MatrixOperations::crossProduct(omega, j_w, wx_jw, 3);
+    MatrixOperations::matrixAdd(j_alpha, wx_jw, tau_jig, 3, 1);
 
-    tau_jig_roll = j_alpha_x + wx_jw_x;
-    tau_jig_pitch = j_alpha_y + wx_jw_y;
-    tau_jig_yaw = j_alpha_z + wx_jw_z;
+    tau_jig_roll = tau_jig[0];
+    tau_jig_pitch = tau_jig[1];
+    tau_jig_yaw = tau_jig[2];
 }
 
 bool initStorage() {
@@ -475,10 +477,21 @@ CommandResult commandFromTorques(float thrustN, float tauRoll, float tauPitch, f
     const float inv_2bL = 1.0f / (2.0f * MOTOR_B_COEFF * L_ARM);
     const float inv_4d = 1.0f / (4.0f * MOTOR_D_COEFF);
 
-    float w1_sq = thrustN * inv_4b - tauRoll * inv_2bL + tauPitch * inv_2bL - tauYaw * inv_4d;
-    float w2_sq = thrustN * inv_4b - tauRoll * inv_2bL - tauPitch * inv_2bL + tauYaw * inv_4d;
-    float w3_sq = thrustN * inv_4b + tauRoll * inv_2bL - tauPitch * inv_2bL - tauYaw * inv_4d;
-    float w4_sq = thrustN * inv_4b + tauRoll * inv_2bL + tauPitch * inv_2bL + tauYaw * inv_4d;
+    const float alloc[16] = {
+        inv_4b, -inv_2bL,  inv_2bL, -inv_4d,
+        inv_4b, -inv_2bL, -inv_2bL,  inv_4d,
+        inv_4b,  inv_2bL, -inv_2bL, -inv_4d,
+        inv_4b,  inv_2bL,  inv_2bL,  inv_4d
+    };
+
+    const float u[4] = {thrustN, tauRoll, tauPitch, tauYaw};
+    float w_sq[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    MatrixOperations::matrixVectorMultiply(alloc, u, w_sq, 4, 4);
+
+    float w1_sq = w_sq[0];
+    float w2_sq = w_sq[1];
+    float w3_sq = w_sq[2];
+    float w4_sq = w_sq[3];
 
     bool saturated = false;
 

@@ -130,6 +130,20 @@ public:
     static float dotProduct(const float* v1, const float* v2, int size);
 
     /**
+     * @brief Cross product for vectors up to 3 dimensions
+     * @param v1 First vector
+     * @param v2 Second vector
+     * @param result Output buffer
+     * @param size Vector size
+     * @return true if successful
+     * @note size=3: classical 3D cross product.
+     *       size=2: returns 2D pseudoscalar z = x1*y2 - y1*x2 in result[0]
+     *       and sets result[1] = 0.
+     *       Other sizes return false.
+     */
+    static bool crossProduct(const float* v1, const float* v2, float* result, int size);
+
+    /**
      * @brief Fast matrix-vector multiplication
      * @param matrix Matrix (rows x cols)
      * @param vector Vector (cols elements)

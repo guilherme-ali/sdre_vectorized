@@ -533,6 +533,33 @@ IRAM_ATTR float MatrixOperations::dotProduct(const float* v1, const float* v2, i
 #endif
 }
 
+IRAM_ATTR bool MatrixOperations::crossProduct(const float* __restrict__ v1,
+                                              const float* __restrict__ v2,
+                                              float* __restrict__ result,
+                                              int size)
+{
+    if (!v1 || !v2 || !result || size < 2) return false;
+
+    if (size == 2) {
+        result[0] = v1[0] * v2[1] - v1[1] * v2[0];
+        result[1] = 0.0f;
+        return true;
+    }
+
+    if (size == 3) {
+        const float x = v1[1] * v2[2] - v1[2] * v2[1];
+        const float y = v1[2] * v2[0] - v1[0] * v2[2];
+        const float z = v1[0] * v2[1] - v1[1] * v2[0];
+
+        result[0] = x;
+        result[1] = y;
+        result[2] = z;
+        return true;
+    }
+
+    return false;
+}
+
 IRAM_ATTR void MatrixOperations::matrixVectorMultiply(const float* __restrict__ matrix, 
                                                       const float* __restrict__ vector, 
                                                       float* __restrict__ result, 
