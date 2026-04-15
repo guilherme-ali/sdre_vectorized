@@ -177,6 +177,7 @@ CommanderPacket remote_command;
 // Flags de segurança
 bool enable_motors = false; // Será ativado quando controle conectar
 bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
+bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
 
 // Callbacks para comunicação WiFi
 void onRemoteCommandReceived(CommanderPacket cmd) {
@@ -185,6 +186,7 @@ void onRemoteCommandReceived(CommanderPacket cmd) {
     
     // Arma os motores na primeira vez que receber comando
     if (!motors_armed_by_remote && !motors.isArmed()) {
+        skip_timing_sample = true;
         motors.armMotors();
         motors_armed_by_remote = true;
         Serial.println("⚡ Motores ARMADOS pelo controle remoto!");
@@ -521,16 +523,23 @@ void loop(){
     static unsigned long loopCount = 0;
     static unsigned long prev_ms = 0;
     static unsigned long last_print_time = 0;  // Tempo que os prints custaram na última vez
-    
-    loopCount++;
-    totalTime += loopTime;
-    bool newMaxTime = false;
-    if (loopTime > maxTime) {
-        maxTime = loopTime;
-        newMaxTime = true;
+
+    bool skipThisSample = skip_timing_sample;
+    if (skipThisSample) {
+        skip_timing_sample = false;
     }
-    
-    float avgTime = (float)totalTime / loopCount;
+
+    bool newMaxTime = false;
+    if (!skipThisSample) {
+        loopCount++;
+        totalTime += loopTime;
+        if (loopTime > maxTime) {
+            maxTime = loopTime;
+            newMaxTime = true;
+        }
+    }
+
+    float avgTime = (loopCount > 0) ? ((float)totalTime / loopCount) : 0.0f;
     
     if (DEBUG_MODE) {
         // ===== MODO DEBUG: Prints detalhados a cada 1 segundo =====
