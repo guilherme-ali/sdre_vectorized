@@ -60,6 +60,8 @@ const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.040;     // 40g
 const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
+const float SAMPLING_TIME_S = 0.02f; // 20 ms
+const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 float omega_r = 0;
 
 // Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
@@ -281,13 +283,10 @@ void setup()
     
     leds.setSensorsCalibration(false); // Calibração concluída
 
-    // Parâmetros para discretização
-    float samplingTime = 0.012f;
-
     // Discretiza a matriz B
     for (int i = 0; i < STATE_SIZE; i++) {
         for (int j = 0; j < CONTROL_SIZE; j++) {
-            Bd[i * CONTROL_SIZE + j] = B[i * CONTROL_SIZE + j] * samplingTime;
+            Bd[i * CONTROL_SIZE + j] = B[i * CONTROL_SIZE + j] * SAMPLING_TIME_S;
         }
     }
 
@@ -310,10 +309,10 @@ void setup()
 
         pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
         pidController.setOutputLimits(-10.0f, 10.0f);
-        pidController.setSamplingTime(samplingTime);
+        pidController.setSamplingTime(SAMPLING_TIME_S);
     }
 
-    filter.begin(1.0f/samplingTime);
+    filter.begin(1.0f / SAMPLING_TIME_S);
     
     // Inicializa o sistema de controle de motores
     motors.begin();
@@ -508,8 +507,7 @@ void loop(){
     // Tempo de processamento
     unsigned long processingTime = micros() - startTime;
     
-    // Força o loop a rodar exatamente em 12000 μs (0.012s)
-    const unsigned long LOOP_PERIOD_US = 12000;
+    // Força o loop a rodar exatamente no período de amostragem configurado
     if (processingTime < LOOP_PERIOD_US) {
         delayMicroseconds(LOOP_PERIOD_US - processingTime);
     }
@@ -756,7 +754,7 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     A[5 * STATE_SIZE + 4] = (1 - alpha_3) * ((Ixx - Iyy) / Izz) * p;
     
     // Discretiza a matriz A atualizada
-    float dt = 0.012f; // Mesmo tempo de amostragem do setup()
+    const float dt = SAMPLING_TIME_S;
 
     // Calcula A^2 para melhor aproximação da discretização
     float A2[STATE_SIZE * STATE_SIZE] = {0};
