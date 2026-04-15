@@ -17,7 +17,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -101,14 +101,16 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 1/Iyy, 0,
     0, 0, 1/Izz
 };
-
+// Baseando-se em Regra de Bryson
+// usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
+// Qii = 1/(max_estado_i)^2 
 float Q[STATE_SIZE * STATE_SIZE] = {
-    100, 0, 0, 0, 0, 0,
-    0, 100, 0, 0, 0, 0,
-    0, 0, 100, 0, 0, 0,
-    0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 1, 0,
-    0, 0, 0, 0, 0, 1
+    3.65, 0, 0, 0, 0, 0,
+    0, 3.65, 0, 0, 0, 0,
+    0, 0, 0.91, 0, 0, 0,
+    0, 0, 0, 1.0, 0, 0,
+    0, 0, 0, 0, 1.0, 0,
+    0, 0, 0, 0, 0, 4.0
 };
 
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
@@ -175,6 +177,7 @@ CommanderPacket remote_command;
 // Flags de segurança
 bool enable_motors = false; // Será ativado quando controle conectar
 bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
+bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
 
 // Callbacks para comunicação WiFi
 void onRemoteCommandReceived(CommanderPacket cmd) {
@@ -183,6 +186,7 @@ void onRemoteCommandReceived(CommanderPacket cmd) {
     
     // Arma os motores na primeira vez que receber comando
     if (!motors_armed_by_remote && !motors.isArmed()) {
+        skip_timing_sample = true;
         motors.armMotors();
         motors_armed_by_remote = true;
         Serial.println("⚡ Motores ARMADOS pelo controle remoto!");
@@ -519,16 +523,23 @@ void loop(){
     static unsigned long loopCount = 0;
     static unsigned long prev_ms = 0;
     static unsigned long last_print_time = 0;  // Tempo que os prints custaram na última vez
-    
-    loopCount++;
-    totalTime += loopTime;
-    bool newMaxTime = false;
-    if (loopTime > maxTime) {
-        maxTime = loopTime;
-        newMaxTime = true;
+
+    bool skipThisSample = skip_timing_sample;
+    if (skipThisSample) {
+        skip_timing_sample = false;
     }
-    
-    float avgTime = (float)totalTime / loopCount;
+
+    bool newMaxTime = false;
+    if (!skipThisSample) {
+        loopCount++;
+        totalTime += loopTime;
+        if (loopTime > maxTime) {
+            maxTime = loopTime;
+            newMaxTime = true;
+        }
+    }
+
+    float avgTime = (loopCount > 0) ? ((float)totalTime / loopCount) : 0.0f;
     
     if (DEBUG_MODE) {
         // ===== MODO DEBUG: Prints detalhados a cada 1 segundo =====
