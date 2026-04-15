@@ -17,7 +17,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -101,14 +101,16 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 1/Iyy, 0,
     0, 0, 1/Izz
 };
-
+// Baseando-se em Regra de Bryson
+// usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
+// Qii = 1/(max_estado_i)^2 
 float Q[STATE_SIZE * STATE_SIZE] = {
-    100, 0, 0, 0, 0, 0,
-    0, 100, 0, 0, 0, 0,
-    0, 0, 100, 0, 0, 0,
-    0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 1, 0,
-    0, 0, 0, 0, 0, 1
+    3.65, 0, 0, 0, 0, 0,
+    0, 3.65, 0, 0, 0, 0,
+    0, 0, 0.91, 0, 0, 0,
+    0, 0, 0, 1.0, 0, 0,
+    0, 0, 0, 0, 1.0, 0,
+    0, 0, 0, 0, 0, 4.0
 };
 
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
