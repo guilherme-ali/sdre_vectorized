@@ -180,9 +180,17 @@ CommanderPacket remote_command;
 bool enable_motors = false; // Será ativado quando controle conectar
 bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
 bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
+bool tilt_failsafe_latched = false; // Trava de segurança por inclinacao excessiva (so libera com reset)
+
+const float MAX_SAFE_TILT_DEG = 45.0f;
+const float MAX_SAFE_TILT_RAD = MAX_SAFE_TILT_DEG * DEG_TO_RAD;
 
 // Callbacks para comunicação WiFi
 void onRemoteCommandReceived(CommanderPacket cmd) {
+    if (tilt_failsafe_latched) {
+        return;
+    }
+
     remote_command = cmd;
     remote_control_enabled = true;
     
@@ -196,6 +204,15 @@ void onRemoteCommandReceived(CommanderPacket cmd) {
 }
 
 void onClientConnected() {
+    if (tilt_failsafe_latched) {
+        Serial.println("⛔ FAILSAFE de inclinacao ativo: reinicie o drone para rearmar motores.");
+        remote_control_enabled = false;
+        enable_motors = false;
+        leds.setSystemReady(false);
+        leds.setUDPReceiving(false);
+        return;
+    }
+
     Serial.println("🎮 Controle remoto CONECTADO!");
     remote_control_enabled = false; // Aguarda primeiro comando
     enable_motors = true; // Habilita sistema de motores
@@ -374,7 +391,9 @@ void loop(){
     t_checkpoint = micros();
     
     // Atualiza LED de recepção UDP
-    if (wifiComm.isClientConnected()) {
+    if (tilt_failsafe_latched) {
+        leds.setUDPReceiving(false);
+    } else if (wifiComm.isClientConnected()) {
         leds.setUDPReceiving(true);
     } else {
         leds.setUDPReceiving(false);
@@ -427,6 +446,32 @@ void loop(){
     float yaw = filter.getYawRadians();
     yaw = 0.0f;
 
+    // Failsafe: desliga e trava motores se inclinacao exceder 45 graus
+    if (!tilt_failsafe_latched &&
+        (fabsf(roll) > MAX_SAFE_TILT_RAD || fabsf(pitch) > MAX_SAFE_TILT_RAD)) {
+        tilt_failsafe_latched = true;
+        remote_control_enabled = false;
+        enable_motors = false;
+        motors_armed_by_remote = false;
+
+        // Para motores imediatamente
+        motors.stopAllMotors();
+
+        // Zera comandos por seguranca
+        remote_command.roll = 0;
+        remote_command.pitch = 0;
+        remote_command.yaw = 0;
+        remote_command.thrust = 0;
+
+        // Atualiza status visual
+        leds.setSystemReady(false);
+        leds.setUDPReceiving(false);
+
+        Serial.println("\n🚨 FAILSAFE: inclinacao acima de 45 graus detectada!");
+        Serial.printf("   Roll: %.2f deg | Pitch: %.2f deg\n", roll * RAD_TO_DEG, pitch * RAD_TO_DEG);
+        Serial.println("   Motores desligados. Reinicie o drone para rearmar.");
+    }
+
     float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
     float q = gy*cos(roll) + gz*sin(roll);
     float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
@@ -455,7 +500,7 @@ void loop(){
         theta_desired = remote_command.pitch * DEG_TO_RAD;
         yaw_desired = remote_command.yaw * DEG_TO_RAD;
 
-        thrust = (remote_command.thrust / 60000.0f) * MAX_THRUST;
+        thrust = (remote_command.thrust / 65535.0f) * MAX_THRUST * 4; // 4 motores
     } else {
         evx = rvx - 0;
         evy = rvy - 0;
@@ -580,7 +625,11 @@ void loop(){
             Serial.printf("   Tempo_Medio: %.2f μs\n", avgTime);
             
             // Status de controle
-            if (remote_control_enabled && wifiComm.isClientConnected()) {
+            if (tilt_failsafe_latched) {
+                Serial.println("\n🚨 MODO: FAILSAFE TRAVADO");
+                Serial.println("   Motivo: roll/pitch acima de 45 graus");
+                Serial.println("   Acao: motores desligados ate reset total do drone");
+            } else if (remote_control_enabled && wifiComm.isClientConnected()) {
                 Serial.println("\n🎮 MODO: CONTROLE REMOTO ATIVO");
                 Serial.println("   Comandos Joystick:");
                 Serial.printf("     Roll:   %+.3f\n", remote_command.roll);
