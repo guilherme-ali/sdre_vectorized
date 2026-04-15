@@ -455,7 +455,7 @@ void loop(){
         theta_desired = remote_command.pitch * DEG_TO_RAD;
         yaw_desired = remote_command.yaw * DEG_TO_RAD;
 
-        thrust = (remote_command.thrust / 60000.0f) * MAX_THRUST;
+        thrust = (remote_command.thrust / 65535.0f) * MAX_THRUST * 4; // 4 motores
     } else {
         evx = rvx - 0;
         evy = rvy - 0;
