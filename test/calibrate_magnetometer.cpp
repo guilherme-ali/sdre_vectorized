@@ -45,7 +45,7 @@
 #define QMC5883L_REG_SET_RESET  0x0B
 
 // Segundo barramento I2C (já definido pela biblioteca Wire do ESP32)
-extern TwoWire Wire1;
+// extern TwoWire Wire1; // Removido, usando Wire padrão
 
 // ===== VARIÁVEIS DE CALIBRAÇÃO =====
 int16_t x_min = 32767, x_max = -32768;
@@ -58,26 +58,27 @@ float scale_x, scale_y, scale_z;
 
 // ===== FUNÇÕES DO QMC5883L =====
 void writeReg(uint8_t reg, uint8_t value) {
-    Wire1.beginTransmission(QMC5883L_ADDR);
-    Wire1.write(reg);
-    Wire1.write(value);
-    Wire1.endTransmission();
+    Wire.beginTransmission(QMC5883L_ADDR);
+    Wire.write(reg);
+    Wire.write(value);
+    Wire.endTransmission();
 }
 
 bool initQMC5883L() {
-    // Inicializa I2C1 nos pinos corretos
-    Wire1.begin(40, 41);  // SDA = GPIO40, SCL = GPIO41
-    Wire1.setClock(400000);
+    // Inicializa I2C1 nos pinos corretos (MPU6050 já faz Wire.begin em outros arquivos,
+    // mas aqui estamos rodando sozinhos)
+    Wire.begin(11, 10);  // SDA = GPIO11, SCL = GPIO10
+    Wire.setClock(400000);
     
     // Verifica se o sensor está presente
-    Wire1.beginTransmission(QMC5883L_ADDR);
-    uint8_t error = Wire1.endTransmission();
+    Wire.beginTransmission(QMC5883L_ADDR);
+    uint8_t error = Wire.endTransmission();
     
     if (error != 0) {
         Serial.println("❌ ERRO: QMC5883L não encontrado!");
         Serial.println("   Verifique as conexões:");
-        Serial.println("   - SDA -> GPIO40");
-        Serial.println("   - SCL -> GPIO41");
+        Serial.println("   - SDA -> GPIO11");
+        Serial.println("   - SCL -> GPIO10");
         Serial.println("   - VCC -> 3.3V");
         Serial.println("   - GND -> GND");
         return false;
@@ -98,16 +99,16 @@ bool initQMC5883L() {
 }
 
 bool readRawQMC5883L(int16_t& x, int16_t& y, int16_t& z) {
-    Wire1.beginTransmission(QMC5883L_ADDR);
-    Wire1.write(QMC5883L_REG_DATA);
-    Wire1.endTransmission();
+    Wire.beginTransmission(QMC5883L_ADDR);
+    Wire.write(QMC5883L_REG_DATA);
+    Wire.endTransmission();
     
-    Wire1.requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6);
+    Wire.requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6);
     
-    if (Wire1.available() >= 6) {
-        x = Wire1.read() | (Wire1.read() << 8);
-        y = Wire1.read() | (Wire1.read() << 8);
-        z = Wire1.read() | (Wire1.read() << 8);
+    if (Wire.available() >= 6) {
+        x = Wire.read() | (Wire.read() << 8);
+        y = Wire.read() | (Wire.read() << 8);
+        z = Wire.read() | (Wire.read() << 8);
         return true;
     }
     return false;
