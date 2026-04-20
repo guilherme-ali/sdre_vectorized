@@ -141,12 +141,12 @@ Madgwick filter;
 // Variáveis de calibração do MPU6050
 #ifdef USE_MPU6050
     // VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
-    float accel_offset_x = 0.058127f;  // SUBSTITUIR com valor calibrado
-    float accel_offset_y = -0.148659f;  // SUBSTITUIR com valor calibrado
-    float accel_offset_z = 0.018737f;  // SUBSTITUIR com valor calibrado
-    float gyro_offset_x = -0.011538f;   // SUBSTITUIR com valor calibrado
-    float gyro_offset_y = 0.015284f;   // SUBSTITUIR com valor calibrado
-    float gyro_offset_z = 0.017474f;   // SUBSTITUIR com valor calibrado
+    float accel_offset_x = 0.056282f;  // SUBSTITUIR com valor calibrado
+    float accel_offset_y = -0.099294f;  // SUBSTITUIR com valor calibrado
+    float accel_offset_z = -0.077579f;  // SUBSTITUIR com valor calibrado
+    float gyro_offset_x = -0.008842f;   // SUBSTITUIR com valor calibrado
+    float gyro_offset_y = 0.015004f;   // SUBSTITUIR com valor calibrado
+    float gyro_offset_z = 0.009097f;   // SUBSTITUIR com valor calibrado
 #endif
 
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
