@@ -17,7 +17,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -141,24 +141,24 @@ Madgwick filter;
 // Variáveis de calibração do MPU6050
 #ifdef USE_MPU6050
     // VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
-    float accel_offset_x = 0.058127f;  // SUBSTITUIR com valor calibrado
-    float accel_offset_y = -0.148659f;  // SUBSTITUIR com valor calibrado
-    float accel_offset_z = 0.018737f;  // SUBSTITUIR com valor calibrado
-    float gyro_offset_x = -0.011538f;   // SUBSTITUIR com valor calibrado
-    float gyro_offset_y = 0.015284f;   // SUBSTITUIR com valor calibrado
-    float gyro_offset_z = 0.017474f;   // SUBSTITUIR com valor calibrado
+    float accel_offset_x = 0.058127f;
+    float accel_offset_y = -0.148659f;
+    float accel_offset_z = 0.018737f;
+    float gyro_offset_x = -0.011538f;
+    float gyro_offset_y = 0.015284f;
+    float gyro_offset_z = 0.010474f;
 #endif
 
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
 // Execute test/calibrate_magnetometer.cpp para obter estes valores
 // Hard-Iron Offsets (valores brutos para subtrair)
-const float MAG_OFFSET_X = 0.0f;   // SUBSTITUIR com valor calibrado
-const float MAG_OFFSET_Y = 0.0f;   // SUBSTITUIR com valor calibrado
-const float MAG_OFFSET_Z = 0.0f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_X = -29.5f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_Y = 39.0f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_Z = 146.0f;   // SUBSTITUIR com valor calibrado
 // Soft-Iron Scales (fatores de escala)
-const float MAG_SCALE_X = 1.0f;    // SUBSTITUIR com valor calibrado
-const float MAG_SCALE_Y = 1.0f;    // SUBSTITUIR com valor calibrado
-const float MAG_SCALE_Z = 1.0f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_X = 1.0153f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_Y = 0.9701f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_Z = 1.0160f;    // SUBSTITUIR com valor calibrado
 // ===============================================
 
 // Instância do controlador de motores
