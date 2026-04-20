@@ -163,9 +163,9 @@ Madgwick filter;
     float accel_offset_x = 0.058127f;
     float accel_offset_y = -0.148659f;
     float accel_offset_z = 0.018737f;
-    float gyro_offset_x = -0.011538f;
-    float gyro_offset_y = 0.015284f;
-    float gyro_offset_z = 0.010474f;
+    float gyro_offset_x = -0.007760f;
+    float gyro_offset_y = 0.017851f;
+    float gyro_offset_z = 0.007761f;
 #endif
 
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====

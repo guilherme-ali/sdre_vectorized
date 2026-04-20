@@ -20,6 +20,11 @@
 const bool DEBUG_MODE = false;
 // ==========================
 
+// ===== FLAG DE TELEMETRIA =====
+// Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
+const bool PRINT_TELEMETRY = true;
+// ==============================
+
 // ===== FLAG DO MAGNETÔMETRO =====
 // Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
 const bool USE_MAGNETOMETER = true;
@@ -158,9 +163,9 @@ Madgwick filter;
     float accel_offset_x = 0.058127f;
     float accel_offset_y = -0.148659f;
     float accel_offset_z = 0.018737f;
-    float gyro_offset_x = -0.011538f;
-    float gyro_offset_y = 0.015284f;
-    float gyro_offset_z = 0.010474f;
+    float gyro_offset_x = -0.007760f;
+    float gyro_offset_y = 0.017851f;
+    float gyro_offset_z = 0.007761f;
 #endif
 
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
@@ -624,6 +629,12 @@ void loop(){
 
     float avgTime = (loopCount > 0) ? ((float)totalTime / loopCount) : 0.0f;
     
+    if (PRINT_TELEMETRY) {
+        Serial.printf("Roll:%.2f,Pitch:%.2f,Yaw:%.2f,P:%.2f,Q:%.2f,R:%.2f\n", 
+                      roll * RAD_TO_DEG, pitch * RAD_TO_DEG, yaw * RAD_TO_DEG, 
+                      p * RAD_TO_DEG, q * RAD_TO_DEG, r * RAD_TO_DEG);
+    }
+
     if (DEBUG_MODE) {
         // ===== MODO DEBUG: Prints detalhados a cada 1 segundo =====
         if (micros() >= prev_ms + 1000000) {
