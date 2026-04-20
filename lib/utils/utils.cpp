@@ -219,17 +219,17 @@ void start_QMC5883L(TwoWire& wireInstance) {
     // Armazena referência ao barramento I2C
     _qmc_wire = &wireInstance;
     
-    // Inicializa o barramento I2C1 com pinos específicos
-    wireInstance.begin(40, 41); // SDA = GPIO40, SCL = GPIO41
-    wireInstance.setClock(400000); // 400kHz Fast Mode
+    // O MPU6050 já inicializou o Wire em `start_IMU_MPU6050`, então não
+    // precisamos chamar `wireInstance.begin` nem `wireInstance.setClock` aqui
+    // para evitar conflitos na configuração dos pinos que já foi feita (11 e 10).
     
     // Verifica se o QMC5883L está presente
-    wireInstance.beginTransmission(QMC5883L_ADDR);
-    uint8_t error = wireInstance.endTransmission();
+    _qmc_wire->beginTransmission(QMC5883L_ADDR);
+    uint8_t error = _qmc_wire->endTransmission();
     
     if (error != 0) {
         Serial.println("❌ ERRO: QMC5883L não encontrado no endereço 0x0D!");
-        Serial.println("   Verifique conexões: SDA=GPIO40, SCL=GPIO41");
+        Serial.println("   Verifique as conexões do barramento I2C");
         return;
     }
     
@@ -244,7 +244,7 @@ void start_QMC5883L(TwoWire& wireInstance) {
     // Modo Contínuo (0x01), ODR 200Hz (0x0C), Range 8G (0x10), OSR 512 (0x00)
     _qmc_writeReg(QMC5883L_REG_CONTROL1, 0x01 | 0x0C | 0x10 | 0x00);
     
-    Serial.println("✅ QMC5883L inicializado com sucesso! (I2C1: SDA=GPIO40, SCL=GPIO41)");
+    Serial.println("✅ QMC5883L inicializado com sucesso! (Mesmo barramento I2C do MPU)");
     
     delay(100); // Aguarda estabilização
 }
@@ -263,6 +263,7 @@ void read_QMC5883L(float& mx, float& my, float& mz) {
     _qmc_wire->requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6);
     
     if (_qmc_wire->available() >= 6) {
+        // No QMC5883L os dados são LSB primeiro e depois MSB!
         int16_t x_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
         int16_t y_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
         int16_t z_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);

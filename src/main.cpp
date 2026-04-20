@@ -17,12 +17,12 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
+const bool DEBUG_MODE = true;
 // ==========================
 
 // ===== FLAG DO MAGNETÔMETRO =====
 // Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
-const bool USE_MAGNETOMETER = false;
+const bool USE_MAGNETOMETER = true;
 // =================================  
 
 // ===== TIPO DE CONTROLADOR =====
@@ -133,10 +133,8 @@ PIDController pidController(STATE_SIZE, CONTROL_SIZE);
     Adafruit_MPU6050 mpu;
 #endif
 
-// Referência ao segundo barramento I2C para sensores adicionais (QMC5883L magnetometer)
-// SDA = GPIO40, SCL = GPIO41
-// Wire1 já é definido pela biblioteca Wire do ESP32
-extern TwoWire Wire1;
+// Usando o mesmo barramento I2C para todos os sensores
+// Wire já é definido e inicializado
 
 Madgwick filter;
 
@@ -286,10 +284,10 @@ void setup()
         start_IMU_MPU6050(mpu);
     #endif
     
-    // Inicializa o magnetômetro QMC5883L no segundo barramento I2C (se habilitado)
+    // Inicializa o magnetômetro QMC5883L no barramento I2C (se habilitado)
     if (USE_MAGNETOMETER) {
         Serial.println("Inicializando QMC5883L (Magnetômetro)...");
-        start_QMC5883L(Wire1);
+        start_QMC5883L(Wire);
         
         // Configura calibração do magnetômetro (valores obtidos de test/calibrate_magnetometer.cpp)
         setQMC5883LCalibration(MAG_OFFSET_X, MAG_OFFSET_Y, MAG_OFFSET_Z,
@@ -444,7 +442,6 @@ void loop(){
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
     float yaw = filter.getYawRadians();
-    yaw = 0.0f;
 
     // Failsafe: desliga e trava motores se inclinacao exceder 45 graus
     if (!tilt_failsafe_latched &&
