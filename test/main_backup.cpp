@@ -106,13 +106,27 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Baseando-se em Regra de Bryson
 // usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
 // Qii = 1/(max_estado_i)^2 
+const float roll_max_rad = 60.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
+const float pitch_max_rad = 60.0f * DEG_TO_RAD;  
+const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
+const float p_max = 45.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = 45.0f * DEG_TO_RAD; // rad/s
+const float r_max = 90.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+
+const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
+const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
+const float Q_33 = 1.0f / (yaw_max_rad * yaw_max_rad);
+const float Q_44 = 1.0f / (p_max * p_max);
+const float Q_55 = 1.0f / (q_max * q_max);
+const float Q_66 = 1.0f / (r_max * r_max);
+
 float Q[STATE_SIZE * STATE_SIZE] = {
-    3.65, 0, 0, 0, 0, 0,
-    0, 3.65, 0, 0, 0, 0,
-    0, 0, 0.91, 0, 0, 0,
-    0, 0, 0, 1.0, 0, 0,
-    0, 0, 0, 0, 1.0, 0,
-    0, 0, 0, 0, 0, 4.0
+    Q_11, 0, 0, 0, 0, 0,
+    0, Q_22, 0, 0, 0, 0,
+    0, 0, Q_33, 0, 0, 0,
+    0, 0, 0, Q_44, 0, 0,
+    0, 0, 0, 0, Q_55, 0,
+    0, 0, 0, 0, 0, Q_66
 };
 
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
@@ -184,6 +198,8 @@ const float MAX_SAFE_TILT_DEG = 45.0f;
 const float MAX_SAFE_TILT_RAD = MAX_SAFE_TILT_DEG * DEG_TO_RAD;
 
 // Callbacks para comunicação WiFi
+float initial_yaw = 0.0f;
+
 void onRemoteCommandReceived(CommanderPacket cmd) {
     if (tilt_failsafe_latched) {
         return;
@@ -329,6 +345,29 @@ void setup()
 
     filter.begin(1.0f / SAMPLING_TIME_S);
     
+    Serial.println("Stabilizing filter to get initial Yaw...");
+    for (int i = 0; i < 200; i++) {
+        #ifdef USE_MPU9250
+            read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
+            if (USE_MAGNETOMETER) {
+                filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
+            } else {
+                filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
+            }
+        #else
+            read_MPU6050(mpu, ax, ay, az, gx, gy, gz, accel_offset_x, accel_offset_y, accel_offset_z, gyro_offset_x, gyro_offset_y, gyro_offset_z);
+            if (USE_MAGNETOMETER) {
+                read_QMC5883L(mx, my, mz);
+                filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
+            } else {
+                filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
+            }
+        #endif
+        delay(20);
+    }
+    initial_yaw = filter.getYawRadians();
+    Serial.printf("Initial Yaw locked at: %.2f degrees\n", initial_yaw * RAD_TO_DEG);
+
     // Inicializa o sistema de controle de motores
     motors.begin();
     motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
@@ -441,7 +480,11 @@ void loop(){
     // Obtém os ângulos de Euler
     float roll = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
-    float yaw = filter.getYawRadians();
+    float yaw = filter.getYawRadians() - initial_yaw;
+
+    // Normaliza o yaw para o intervalo [-PI, PI]
+    while (yaw > PI) yaw -= 2.0f * PI;
+    while (yaw < -PI) yaw += 2.0f * PI;
 
     // Failsafe: desliga e trava motores se inclinacao exceder 45 graus
     if (!tilt_failsafe_latched &&
