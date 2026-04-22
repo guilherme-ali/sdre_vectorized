@@ -171,13 +171,13 @@ Madgwick filter;
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
 // Execute test/calibrate_magnetometer.cpp para obter estes valores
 // Hard-Iron Offsets (valores brutos para subtrair)
-const float MAG_OFFSET_X = -29.5f;   // SUBSTITUIR com valor calibrado
-const float MAG_OFFSET_Y = 39.0f;   // SUBSTITUIR com valor calibrado
-const float MAG_OFFSET_Z = 146.0f;   // SUBSTITUIR com valor calibrado
+const float MAG_OFFSET_X = 26.5f;
+const float MAG_OFFSET_Y = 221.5f;
+const float MAG_OFFSET_Z = -72.5f;
 // Soft-Iron Scales (fatores de escala)
-const float MAG_SCALE_X = 1.0153f;    // SUBSTITUIR com valor calibrado
-const float MAG_SCALE_Y = 0.9701f;    // SUBSTITUIR com valor calibrado
-const float MAG_SCALE_Z = 1.0160f;    // SUBSTITUIR com valor calibrado
+const float MAG_SCALE_X = 1.0243f;
+const float MAG_SCALE_Y = 0.9575f;
+const float MAG_SCALE_Z = 1.0210f;
 // ===============================================
 
 // Instância do controlador de motores
