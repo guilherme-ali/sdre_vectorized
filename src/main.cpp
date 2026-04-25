@@ -8,7 +8,6 @@
 
 #include <AutoLQR.h>
 #include "PIDController.h"
-#include "MPU9250.h"
 #include <MadgwickAHRS.h>
 #include "KalmanFilter.h"
 #include <Wire.h>
@@ -38,14 +37,8 @@ const int CONTROLLER_TYPE = 0;
 
 #include "sensor_config.h" 
 
-#ifdef USE_MPU9250
-    #include <Adafruit_BMP280.h>
-#endif
-
-#ifdef USE_MPU6050
-    #include <Adafruit_MPU6050.h>
-    #include <Adafruit_Sensor.h>
-#endif
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
 
 #include "utils.h" // Deve vir DEPOIS das definições de sensor
 #include "MotorControl.h" // Incluir controle de motores
@@ -145,12 +138,7 @@ AutoLQR sdreController(STATE_SIZE, CONTROL_SIZE);
 PIDController pidController(STATE_SIZE, CONTROL_SIZE);
 
 // Declaração dos sensores
-#ifdef USE_MPU9250
-    MPU9250 IMU(Wire, 0x68);
-    Adafruit_BMP280 bmp; // BMP280 só está disponível com MPU9250
-#else
-    Adafruit_MPU6050 mpu;
-#endif
+Adafruit_MPU6050 mpu;
 
 // Usando o mesmo barramento I2C para todos os sensores
 // Wire já é definido e inicializado
@@ -158,15 +146,13 @@ PIDController pidController(STATE_SIZE, CONTROL_SIZE);
 Madgwick filter;
 
 // Variáveis de calibração do MPU6050
-#ifdef USE_MPU6050
-    // VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
-    float accel_offset_x = 0.058127f;
-    float accel_offset_y = -0.148659f;
-    float accel_offset_z = 0.018737f;
-    float gyro_offset_x = -0.007760f;
-    float gyro_offset_y = 0.017851f;
-    float gyro_offset_z = 0.007761f;
-#endif
+// VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
+float accel_offset_x = 0.058127f;
+float accel_offset_y = -0.148659f;
+float accel_offset_z = 0.018737f;
+float gyro_offset_x = -0.007760f;
+float gyro_offset_y = 0.017851f;
+float gyro_offset_z = 0.007761f;
 
 // ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
 // Execute test/calibrate_magnetometer.cpp para obter estes valores
@@ -296,14 +282,8 @@ void setup()
     // Inicialização dos sensores
     leds.setSensorsCalibration(true); // LED azul piscando lentamente
     
-    #ifdef USE_MPU9250
-        Serial.println("Usando MPU9250 + BMP280");
-        start_IMU_MPU9250(IMU);
-        start_BMP(bmp);
-    #else
-        Serial.println("Usando MPU6050 (sem BMP280)");
-        start_IMU_MPU6050(mpu);
-    #endif
+    Serial.println("Usando MPU6050 (sem BMP280)");
+    start_IMU_MPU6050(mpu);
     
     // Inicializa o magnetômetro QMC5883L no barramento I2C (se habilitado)
     if (USE_MAGNETOMETER) {
@@ -352,22 +332,13 @@ void setup()
     
     Serial.println("Stabilizing filter to get initial Yaw...");
     for (int i = 0; i < 200; i++) {
-        #ifdef USE_MPU9250
-            read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
-            if (USE_MAGNETOMETER) {
-                filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
-            } else {
-                filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
-            }
-        #else
-            read_MPU6050(mpu, ax, ay, az, gx, gy, gz, accel_offset_x, accel_offset_y, accel_offset_z, gyro_offset_x, gyro_offset_y, gyro_offset_z);
-            if (USE_MAGNETOMETER) {
-                read_QMC5883L(mx, my, mz);
-                filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
-            } else {
-                filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
-            }
-        #endif
+        read_MPU6050(mpu, ax, ay, az, gx, gy, gz, accel_offset_x, accel_offset_y, accel_offset_z, gyro_offset_x, gyro_offset_y, gyro_offset_z);
+        if (USE_MAGNETOMETER) {
+            read_QMC5883L(mx, my, mz);
+            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
+        } else {
+            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
+        }
         delay(20);
     }
     initial_yaw = filter.getYawRadians();
@@ -442,45 +413,28 @@ void loop(){
     }
 
     // Leitura do sensor selecionado
-    #ifdef USE_MPU9250
-        read_MPU9250(IMU, ax, ay, az, gx, gy, gz, mx, my, mz);
-        t_mpu = micros() - t_checkpoint;
-        t_mag = 0; // MPU9250 tem magnetômetro integrado
+    read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
+                 accel_offset_x, accel_offset_y, accel_offset_z,
+                 gyro_offset_x, gyro_offset_y, gyro_offset_z);
+    t_mpu = micros() - t_checkpoint;
+    t_checkpoint = micros();
+    
+    // Lê o magnetômetro QMC5883L (se habilitado)
+    if (USE_MAGNETOMETER) {
+        read_QMC5883L(mx, my, mz);
+        t_mag = micros() - t_checkpoint;
         t_checkpoint = micros();
-        // MPU9250 retorna rad/s, Madgwick espera graus/s
-        if (USE_MAGNETOMETER) {
-            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                          ax, ay, az, mx, my, mz);
-        } else {
-            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                             ax, ay, az);
-        }
-        t_filter = micros() - t_checkpoint;
-        t_checkpoint = micros();
-    #else
-        read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
-                     accel_offset_x, accel_offset_y, accel_offset_z,
-                     gyro_offset_x, gyro_offset_y, gyro_offset_z);
-        t_mpu = micros() - t_checkpoint;
-        t_checkpoint = micros();
-        
-        // Lê o magnetômetro QMC5883L (se habilitado)
-        if (USE_MAGNETOMETER) {
-            read_QMC5883L(mx, my, mz);
-            t_mag = micros() - t_checkpoint;
-            t_checkpoint = micros();
-            // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
-            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                          ax, ay, az, mx, my, mz);
-        } else {
-            t_mag = 0;
-            // Usa apenas accel+gyro (6-DOF) - sem magnetômetro
-            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
-                             ax, ay, az);
-        }
-        t_filter = micros() - t_checkpoint;
-        t_checkpoint = micros();
-    #endif
+        // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
+        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                      ax, ay, az, mx, my, mz);
+    } else {
+        t_mag = 0;
+        // Usa apenas accel+gyro (6-DOF) - sem magnetômetro
+        filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+                         ax, ay, az);
+    }
+    t_filter = micros() - t_checkpoint;
+    t_checkpoint = micros();
 
     // Obtém os ângulos de Euler
     float roll = filter.getRollRadians();

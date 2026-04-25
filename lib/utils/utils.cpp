@@ -10,40 +10,6 @@ extern AutoLQR controller;
 
 // ============= FUNÇÕES DE INICIALIZAÇÃO =============
 
-void start_IMU_MPU9250(MPU9250& IMU) {
-    Wire.begin(); // Inicializa a comunicação I2C
-    int status_IMU = IMU.begin();
-    if (status_IMU < 0) {
-        Serial.println("Falha na inicialização do MPU9250");
-        Serial.print("Status_IMU: ");
-        Serial.println(status_IMU);
-        if(status_IMU != -5){
-            while(1) {}
-        }
-    }
-
-    Serial.println("MPU9250 inicializado com sucesso!");
-
-    // Define o range do acelerômetro para +/-2G 
-    IMU.setAccelRange(MPU9250::ACCEL_RANGE_2G);
-    // Define o range do giroscópio para +/-250 deg/s
-    IMU.setGyroRange(MPU9250::GYRO_RANGE_250DPS);
-    // Define a largura de banda do DLPF para 92 Hz
-    IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
-    // Define o divisor de taxa de amostragem para 9 (100 Hz)
-    IMU.setSrd(9);
-
-    /*
-    Serial.println("Calibrando acelerômetro");
-    IMU.calibrateAccel();
-    Serial.println("Calibrando giroscópio");
-    IMU.calibrateGyro();
-    Serial.println("Calibrando magnetômetro");
-    IMU.calibrateMag();
-    */
-}
-
-#ifdef USE_MPU6050
 void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     // Inicializa I2C com os pinos corretos para ESP32-S2
     Wire.begin(11, 10); // SDA = GPIO11, SCL = GPIO10
@@ -146,7 +112,6 @@ void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az,
     gy = g.gyro.y - gyro_offset_y;
     gz = g.gyro.z - gyro_offset_z;
 }
-#endif
 
 void start_BMP(Adafruit_BMP280& bmp) {
     unsigned status_bmp = bmp.begin(0x76);
@@ -284,26 +249,6 @@ void read_QMC5883L(float& mx, float& my, float& mz) {
     } else {
         mx = my = mz = 0;
     }
-}
-
-// ============= FUNÇÕES DE LEITURA =============
-
-void read_MPU9250(MPU9250& IMU, float& ax, float& ay, float& az, 
-                  float& gx, float& gy, float& gz, float& mx, float& my, float& mz) {
-    IMU.readSensor();
-
-    // Converte os dados para unidades adequadas
-    ax = IMU.getAccelX_mss() / 9.81; // m/s² para g
-    ay = IMU.getAccelY_mss() / 9.81;
-    az = -IMU.getAccelZ_mss() / 9.81;
-
-    gx = IMU.getGyroX_rads(); // Já em rad/s
-    gy = IMU.getGyroY_rads();
-    gz = IMU.getGyroZ_rads();
-
-    mx = IMU.getMagX_uT(); // Magnetômetro em µT
-    my = IMU.getMagY_uT();
-    mz = IMU.getMagZ_uT();
 }
 
 // ============= FUNÇÕES DE CÁLCULO DE CONTROLE =============

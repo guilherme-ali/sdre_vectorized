@@ -23,20 +23,8 @@
 #include "sensor_config.h"
 #include "MatrixOperations.h"
 
-#ifdef USE_MPU6050
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#endif
-
-#ifdef USE_MPU9250
-#include "MPU9250.h"
-#endif
-
-#ifndef USE_MPU6050
-#ifndef USE_MPU9250
-#error "Defina USE_MPU6050 ou USE_MPU9250 em sensor_config.h"
-#endif
-#endif
 
 // ======== Parametros fisicos conhecidos (ajuste se necessario) ========
 static constexpr float MOTOR_B_COEFF = 1.11e-8f;                 // N/(rad/s)^2
@@ -89,15 +77,11 @@ static constexpr uint16_t LOG_VERSION = 1;
 static constexpr uint32_t LOG_DECIMATION = 2;         // 125 Hz de log com loop a 250 Hz
 
 // ======== Sensores ========
-#ifdef USE_MPU6050
 static constexpr int I2C_SDA = 11;
 static constexpr int I2C_SCL = 10;
 Adafruit_MPU6050 imu;
-#endif
 
-#ifdef USE_MPU9250
-MPU9250 imu(Wire, 0x68);
-#endif
+
 
 MotorControl motors;
 
@@ -383,7 +367,6 @@ void printUSBMenu() {
 }
 
 bool initIMU() {
-#ifdef USE_MPU6050
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(1000000);
 
@@ -398,43 +381,14 @@ bool initIMU() {
 
     Serial.println("IMU: MPU6050 inicializado.");
     return true;
-#endif
-
-#ifdef USE_MPU9250
-    Wire.begin();
-
-    int status = imu.begin();
-    if (status < 0) {
-        Serial.print("ERRO: MPU9250 falhou com status ");
-        Serial.println(status);
-        return false;
-    }
-
-    imu.setAccelRange(MPU9250::ACCEL_RANGE_2G);
-    imu.setGyroRange(MPU9250::GYRO_RANGE_500DPS);
-    imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_92HZ);
-    imu.setSrd(4);
-
-    Serial.println("IMU: MPU9250 inicializado.");
-    return true;
-#endif
 }
 
 void readGyroRaw(float& gx, float& gy, float& gz) {
-#ifdef USE_MPU6050
     sensors_event_t a, g, temp;
     imu.getEvent(&a, &g, &temp);
     gx = g.gyro.x;
     gy = g.gyro.y;
     gz = g.gyro.z;
-#endif
-
-#ifdef USE_MPU9250
-    imu.readSensor();
-    gx = imu.getGyroX_rads();
-    gy = imu.getGyroY_rads();
-    gz = imu.getGyroZ_rads();
-#endif
 }
 
 void readGyroBodyRates(GyroRates& rates) {
