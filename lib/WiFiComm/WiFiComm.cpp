@@ -213,6 +213,10 @@ void WiFiComm::processPacket(uint8_t* buffer, int length, IPAddress remoteIP, in
 
 void WiFiComm::processCommanderPacket(uint8_t* buffer, int length) {
     memcpy(&_lastCommand, &buffer[1], sizeof(CommanderPacket));
+    
+    // Inverte o sinal do pitch (corrige padronização frente/trás do controle para o código)
+    _lastCommand.pitch = -_lastCommand.pitch;
+
     _newCommandAvailable = true;
     
     if (_debugEnabled || _verboseEnabled) {
