@@ -6,7 +6,7 @@ Biblioteca otimizada para cálculo de ganhos LQR em tempo real, projetada para s
 
 - **7 métodos de solução DARE** implementados
 - **Operações matriciais otimizadas** para sistemas de pequeno/médio porte
-- **Filtro de Kalman** integrado para estimação de estados
+- **Filtro de Kalman** removido em favor do uso do **Filtro Madgwick** (via biblioteca externa) para estimação de orientação
 - **Warm-start** para métodos iterativos
 - **Baixo consumo de memória** com alocação dinâmica controlada
 
@@ -240,7 +240,6 @@ onde $K_r$ é o ganho de referência para tracking.
 AUTOLQR/
 ├── AutoLQR.cpp          # Implementação principal
 ├── AutoLQR.h            # Interface da classe
-├── KalmanFilter.cpp/h   # Filtro de Kalman
 ├── MatrixOperations.cpp/h # Operações matriciais
 └── README.md            # Esta documentação
 ```

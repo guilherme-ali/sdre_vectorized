@@ -184,7 +184,7 @@ Após confirmar que tudo funciona:
 Se encontrar problemas:
 1. Ative modo verbose no código
 2. Copie output do Serial Monitor
-3. Verifique documentação: `lib/WiFiComm/README.md`
+3. Verifique documentação: `../lib/WiFiComm/README.md`
 4. Veja integração completa: `WIFI_INTEGRATION.md`
 
 ---

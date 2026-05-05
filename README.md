@@ -10,8 +10,9 @@ Este projeto implementa um controlador LQR adaptativo baseado na técnica SDRE p
 
 - **Controle SDRE em tempo real** - Recálculo dos ganhos a cada ciclo de controle
 - **Múltiplos solvers DARE** - 7 algoritmos diferentes para resolver a equação de Riccati
-- **Filtro de Kalman** - Estimação de estados com fusão sensorial (IMU + Magnetômetro)
-- **Comunicação WiFi** - Telemetria e ajuste de parâmetros em tempo real
+- **Filtro Madgwick** - Estimação de orientação (AHRS) em tempo real a partir de dados da IMU
+- **Comunicação WiFi (CRTP)** - Telemetria e controle remoto via UDP compatível com app LiteWing
+- **Gestão de Energia e Status** - Monitoramento de tensão da bateria com fail-safe e LEDs indicadores
 - **Otimizado para ESP32** - Uso eficiente de memória e processamento
 
 ## 🔧 Hardware Suportado
@@ -26,9 +27,10 @@ Este projeto implementa um controlador LQR adaptativo baseado na técnica SDRE p
 
 ```
 SDRE_VECTORIZED/
-├── src/
-│   └── main.cpp              # Benchmark dos solvers DARE
-├── lib/
+├── docs/                     # Guias e documentações auxiliares
+├── src/                      # Código fonte principal
+│   └── main.cpp              # Ponto de entrada do sistema
+├── lib/                      # Bibliotecas do projeto
 │   ├── AUTOLQR/              # Biblioteca principal de controle LQR
 │   │   ├── AutoLQR.cpp/h     # Classe principal com solvers DARE
 │   │   ├── KalmanFilter.cpp/h # Filtro de Kalman para estimação
@@ -118,8 +120,9 @@ void loop() {
 
 - [AUTOLQR Library](lib/AUTOLQR/README.md) - Documentação da biblioteca de controle
 - [Motor Calibration](lib/MotorControl/MOTOR_CALIBRATION_GUIDE.md) - Guia de calibração dos motores
-- [WiFi Integration](WIFI_INTEGRATION.md) - Configuração da comunicação WiFi
-- [LED Guide](LED_BATTERY_GUIDE.md) - Indicadores LED e bateria
+- [WiFi Integration](docs/WIFI_INTEGRATION.md) - Configuração da comunicação WiFi e App LiteWing
+- [Quick Test](docs/QUICK_TEST.md) - Guia rápido para testar a conexão com o controle remoto
+- [LED & Battery Guide](docs/LED_BATTERY_GUIDE.md) - Indicadores LED e monitoramento de bateria
 
 ## 🧮 Modelo do Sistema
 
