@@ -1,307 +1,423 @@
 import numpy as np
+import scipy.linalg
 import matplotlib.pyplot as plt
-from scipy.linalg import solve_continuous_are
-from matplotlib.animation import FuncAnimation
+import matplotlib.animation as animation
 
-# Classe do quadricóptero
-class Quadcopter:
-    def __init__(self, I, dt=0.01):
-        self.Ix, self.Iy, self.Iz = I
-        self.dt = dt
-        self.x = np.zeros(6)  # [phi, theta, psi, p, q, r]
+# ==========================================
+# 1. PARÂMETROS DO DRONE E LIMITES FÍSICOS
+# ==========================================
+Ixx = 16.57e-6
+Iyy = 16.57e-6
+Izz = 29.80e-6
+Ir = 1.02e-7
+m = 0.040  # 40g
+g = 9.80665
+dt = 0.02  # 20ms
 
-    def dynamics(self, x, u, disturbance=None):
-        phi, theta, psi, p, q, r = x
-        tau_phi, tau_theta, tau_psi = u
+# Parâmetros Físicos dos Motores (Do main.cpp)
+b_coeff = 1.31e-8  # Coeficiente de Empuxo
+d_coeff = 0.05 * b_coeff  # Coeficiente de Arrasto
+L_arm = 0.060  # 60mm
+L_eff = L_arm * np.sin(np.pi / 4)  # Braço efetivo para config em 'X'
 
-        # Adiciona distúrbio (vento) como torques extras, se fornecido
-        if disturbance is not None:
-            tau_phi += disturbance[0]
-            tau_theta += disturbance[1]
-            tau_psi += disturbance[2]
+# LIMITES DE RPM (Saturação)
+MAX_RPM = 31086.0
+MAX_OMEGA = MAX_RPM * (2.0 * np.pi) / 60.0
+MAX_OMEGA_SQ = MAX_OMEGA**2
 
-        # Cinemática de Euler
-        phi_dot = p + q*np.sin(phi)*np.tan(theta) + r*np.cos(phi)*np.tan(theta)
-        theta_dot = q*np.cos(phi) - r*np.sin(phi)
-        psi_dot = q*np.sin(phi)/np.cos(theta) + r*np.cos(phi)/np.cos(theta)
+# Matriz de Mistura (Mixer Matrix) para Quadricóptero em 'X'
+M_mixer = np.array(
+    [
+        [b_coeff, b_coeff, b_coeff, b_coeff],  # Empuxo Total (Z)
+        [
+            -b_coeff * L_eff,
+            -b_coeff * L_eff,
+            b_coeff * L_eff,
+            b_coeff * L_eff,
+        ],  # Roll (X)
+        [
+            -b_coeff * L_eff,
+            b_coeff * L_eff,
+            b_coeff * L_eff,
+            -b_coeff * L_eff,
+        ],  # Pitch (Y)
+        [-d_coeff, d_coeff, -d_coeff, d_coeff],  # Yaw (Z)
+    ]
+)
+M_inv = np.linalg.inv(M_mixer)
 
-        # Dinâmica rotacional
-        p_dot = (1/self.Ix)*(tau_phi + (self.Iy - self.Iz)*q*r)
-        q_dot = (1/self.Iy)*(tau_theta + (self.Iz - self.Ix)*r*p)
-        r_dot = (1/self.Iz)*(tau_psi + (self.Ix - self.Iy)*p*q)
+# Matrizes de Peso do SDRE (Q e R)
+roll_max_rad = 60.0 * np.pi / 180.0
+pitch_max_rad = 60.0 * np.pi / 180.0
+yaw_max_rad = 90.0 * np.pi / 180.0
+p_max = 45.0 * np.pi / 180.0
+q_max = 45.0 * np.pi / 180.0
+r_max = 90.0 * np.pi / 180.0
 
-        return np.array([phi_dot, theta_dot, psi_dot, p_dot, q_dot, r_dot])
-
-    def step(self, u, disturbance=None):
-        x_dot = self.dynamics(self.x, u, disturbance)
-        self.x += self.dt * x_dot
-        return self.x
-
-# Classe do Filtro de Kalman Estendido
-class ExtendedKalmanFilter:
-    def __init__(self, dt, process_noise_std, measurement_noise_std):
-        self.dt = dt
-        self.x_hat = np.zeros(6)  # Estado estimado [phi, theta, psi, p, q, r]
-        self.P = np.eye(6) * 1.0  # Matriz de covariância do erro
-        
-        # Matriz de ruído do processo (Q)
-        self.Q = np.eye(6) * (process_noise_std**2)
-        
-        # Matriz de ruído da medição (R) - assumindo que medimos ângulos e velocidades angulares
-        self.R = np.eye(6) * (measurement_noise_std**2)
-        
-        # Matriz de observação (medimos todos os estados)
-        self.H = np.eye(6)
-        
-    def predict(self, u, quad_model):
-        """Etapa de predição do filtro de Kalman"""
-        # Predição do estado usando o modelo dinâmico
-        x_dot = quad_model.dynamics(self.x_hat, u, disturbance=None)
-        self.x_hat = self.x_hat + self.dt * x_dot
-        
-        # Jacobiana da dinâmica (matriz F)
-        F = self.compute_jacobian(self.x_hat, u, quad_model)
-        
-        # Atualização da covariância
-        self.P = F @ self.P @ F.T + self.Q
-        
-    def update(self, measurement):
-        """Etapa de atualização do filtro de Kalman"""
-        # Inovação
-        y = measurement - self.H @ self.x_hat
-        
-        # Covariância da inovação
-        S = self.H @ self.P @ self.H.T + self.R
-        
-        # Ganho de Kalman
-        K = self.P @ self.H.T @ np.linalg.inv(S)
-        
-        # Atualização do estado
-        self.x_hat = self.x_hat + K @ y
-        
-        # Atualização da covariância
-        I = np.eye(6)
-        self.P = (I - K @ self.H) @ self.P
-        
-    def compute_jacobian(self, x, u, quad_model):
-        """Calcula a jacobiana da dinâmica por diferenças finitas"""
-        F = np.zeros((6, 6))
-        f0 = quad_model.dynamics(x, u, disturbance=None)
-        h = 1e-6
-        
-        for j in range(6):
-            xp = x.copy()
-            xp[j] += h
-            f1 = quad_model.dynamics(xp, u, disturbance=None)
-            F[:, j] = (f1 - f0) / h
-            
-        # Converte para matriz discreta
-        F_discrete = np.eye(6) + F * self.dt
-        return F_discrete
-
-# Parâmetros do sistema
-I = (0.02, 0.02, 0.04)      # Momentos de inércia
-quad = Quadcopter(I)
-B = np.array([[0,0,0], [0,0,0], [0,0,0],
-              [1/I[0],0,0], [0,1/I[1],0], [0,0,1/I[2]]])
-Q = np.diag([100, 100, 100, 1, 1, 1])
+Q = np.diag(
+    [
+        1.0 / (roll_max_rad**2),
+        1.0 / (pitch_max_rad**2),
+        1.0 / (yaw_max_rad**2),
+        1.0 / (p_max**2),
+        1.0 / (q_max**2),
+        1.0 / (r_max**2),
+    ]
+)
 R = np.eye(3)
-C = np.zeros((3,6)); C[0,0] = C[1,1] = C[2,2] = 1.0
 
-# Configuração de ruídos
-wind_std = 1.0              # intensidade do distúrbio de torque (Nm)
-process_noise_std = 0.000001     # ruído do processo para o filtro de Kalman
-measurement_noise_std = 0 # ruído de medição (sensores)
 
-# Inicialização do filtro de Kalman
-ekf = ExtendedKalmanFilter(quad.dt, process_noise_std, measurement_noise_std)
+# ==========================================
+# 2. CLASSES E FUNÇÕES AUXILIARES
+# ==========================================
+class PIDController:
+    def __init__(self, kp, ki, kd, dt, limit):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.dt = dt
+        self.limit = limit
+        self.integral = 0.0
+        self.prev_error = 0.0
 
-# Tempo e referência
-T = 8.0
-dt = quad.dt
-t = np.arange(0, T, dt)
-r_phi = np.where((t > 1) & (t < 3) , np.deg2rad(10), 0.0)
-r_theta = np.where((t > 3) & (t < 5), np.deg2rad(-10), 0.0)
-r_psi = np.where((t > 5) & (t < 7), np.deg2rad(90), 0.0)
-r_ref = np.vstack([r_phi, r_theta, r_psi])
+    def update(self, error):
+        self.integral += error * self.dt
+        self.integral = np.clip(self.integral, -self.limit, self.limit)
 
-# Armazenamento de históricos
-phi_hist, theta_hist, psi_hist = [], [], []
-p_hist, q_hist, r_hist = [], [], []
-phi_est_hist, theta_est_hist, psi_est_hist = [], [], []
-p_est_hist, q_est_hist, r_est_hist = [], [], []
-phi_meas_hist, theta_meas_hist, psi_meas_hist = [], [], []
-u_hist = []
-dist_hist = []
+        derivative = (error - self.prev_error) / self.dt
+        self.prev_error = error
 
-# Simulação com ruído de vento e estimação de estados
-for k in range(len(t)):
-    # Estado real atual
-    x_real = quad.x.copy()
-    
-    # Simulação das medições com ruído
-    measurement_noise = measurement_noise_std * np.random.randn(6)
-    y_measured = x_real + measurement_noise
-    
-    # Etapa de predição do filtro de Kalman
-    # (usa o comando anterior se k > 0, senão usa zeros)
-    u_prev = u_hist[-1] if k > 0 else np.zeros(3)
-    ekf.predict(u_prev, quad)
-    
-    # Etapa de atualização do filtro de Kalman
-    ekf.update(y_measured)
-    
-    # Usa o estado estimado para o controle SDRE
-    x_estimated = ekf.x_hat.copy()
-    
-    # Jacobiana A(x) por diferenças finitas no estado estimado
-    A = np.zeros((6,6))
-    f0 = quad.dynamics(x_estimated, np.zeros(3), disturbance=None)
-    h = 1e-6
-    for j in range(6):
-        xp = x_estimated.copy(); xp[j] += h
-        f1 = quad.dynamics(xp, np.zeros(3), disturbance=None)
-        A[:,j] = (f1 - f0)/h
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        return np.clip(output, -self.limit, self.limit)
 
-    # SDRE: resolve Riccati e obtém ganho
-    P = solve_continuous_are(A, B, Q, R)
-    K = np.linalg.inv(R) @ (B.T @ P)
-    try:
-        Kr = -np.linalg.inv(C @ np.linalg.inv(A - B @ K) @ B)
-    except np.linalg.LinAlgError:
-        Kr = np.zeros((3,3))
 
-    # Lei de controle baseada no estado estimado
-    u = -K @ x_estimated + Kr @ r_ref[:,k]
-    
-    # Amostra distúrbio de vento (ruído gaussiano)
-    disturbance = wind_std * np.random.randn(3)
-    
-    # Aplica comando com ruído ao sistema real
-    quad.step(u, disturbance=disturbance)
+def get_sdre_matrices(roll, pitch, yaw, p, q, r, omega_r=0.0):
+    alpha_1, alpha_2, alpha_3 = 0.5, 0.5, 0.5
+    A = np.zeros((6, 6))
 
-    # Salva históricos
-    # Estados reais
-    phi_hist.append(quad.x[0]); theta_hist.append(quad.x[1]); psi_hist.append(quad.x[2])
-    p_hist.append(quad.x[3]); q_hist.append(quad.x[4]); r_hist.append(quad.x[5])
-    
-    # Estados estimados
-    phi_est_hist.append(ekf.x_hat[0]); theta_est_hist.append(ekf.x_hat[1]); psi_est_hist.append(ekf.x_hat[2])
-    p_est_hist.append(ekf.x_hat[3]); q_est_hist.append(ekf.x_hat[4]); r_est_hist.append(ekf.x_hat[5])
-    
-    # Medições ruidosas
-    phi_meas_hist.append(y_measured[0]); theta_meas_hist.append(y_measured[1]); psi_meas_hist.append(y_measured[2])
-    
-    u_hist.append(u)
-    dist_hist.append(disturbance)
+    sr, cr = np.sin(roll), np.cos(roll)
+    cp, tp = np.cos(pitch), np.tan(pitch)
 
-# Converte para arrays
-phi_hist = np.array(phi_hist)
-theta_hist = np.array(theta_hist)
-psi_hist = np.array(psi_hist)
-p_hist = np.array(p_hist)
-q_hist = np.array(q_hist)
-r_hist = np.array(r_hist)
+    if abs(cp) < 1e-5:
+        cp = np.sign(cp) * 1e-5
+    inv_cp = 1.0 / cp
 
-phi_est_hist = np.array(phi_est_hist)
-theta_est_hist = np.array(theta_est_hist)
-psi_est_hist = np.array(psi_est_hist)
-p_est_hist = np.array(p_est_hist)
-q_est_hist = np.array(q_est_hist)
-r_est_hist = np.array(r_est_hist)
+    A[0, 3] = 1.0
+    A[0, 4] = sr * tp
+    A[0, 5] = cr * tp
+    A[1, 4] = cr
+    A[1, 5] = -sr
+    A[2, 4] = sr * inv_cp
+    A[2, 5] = cr * inv_cp
 
-phi_meas_hist = np.array(phi_meas_hist)
-theta_meas_hist = np.array(theta_meas_hist)
-psi_meas_hist = np.array(psi_meas_hist)
+    A[3, 4] = alpha_1 * ((Iyy - Izz) / Ixx) * r - Ir * omega_r / Ixx
+    A[3, 5] = (1 - alpha_1) * ((Iyy - Izz) / Ixx) * q
 
-u_hist = np.array(u_hist)
-dist_hist = np.array(dist_hist)
+    A[4, 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r + Ir * omega_r / Iyy
+    A[4, 5] = (1 - alpha_2) * ((Izz - Ixx) / Iyy) * p
 
-# Plot dos ângulos, estimativas, medições, torques de controle e distúrbio
-fig_2d, axs = plt.subplots(6, 1, figsize=(12, 18), sharex=True)
+    A[5, 3] = alpha_3 * ((Ixx - Iyy) / Izz) * q
+    A[5, 4] = (1 - alpha_3) * ((Ixx - Iyy) / Izz) * p
 
-# Subplot 1: Phi
-axs[0].plot(t, np.rad2deg(phi_hist), 'b-', label='φ real (°)', linewidth=2)
-axs[0].plot(t, np.rad2deg(phi_est_hist), 'r--', label='φ estimado (°)', linewidth=2)
-axs[0].plot(t, np.rad2deg(phi_meas_hist), 'g.', alpha=0.3, markersize=1, label='φ medido (°)')
-axs[0].plot(t, np.rad2deg(r_phi), 'k--', alpha=0.6, label='ref φ')
-axs[0].set_ylabel('φ (°)')
-axs[0].legend()
-axs[0].grid(True)
-axs[0].set_title('Simulação de Atitude com SDRE, Filtro de Kalman e Distúrbios')
+    B = np.zeros((6, 3))
+    B[3, 0] = 1.0 / Ixx
+    B[4, 1] = 1.0 / Iyy
+    B[5, 2] = 1.0 / Izz
 
-# Subplot 2: Theta
-axs[1].plot(t, np.rad2deg(theta_hist), 'b-', label='θ real (°)', linewidth=2)
-axs[1].plot(t, np.rad2deg(theta_est_hist), 'r--', label='θ estimado (°)', linewidth=2)
-axs[1].plot(t, np.rad2deg(theta_meas_hist), 'g.', alpha=0.3, markersize=1, label='θ medido (°)')
-axs[1].plot(t, np.rad2deg(r_theta), 'k--', alpha=0.6, label='ref θ')
-axs[1].set_ylabel('θ (°)')
-axs[1].legend()
-axs[1].grid(True)
+    A2 = A @ A
+    Ad = np.eye(6) + A * dt + A2 * (dt**2 * 0.5)
+    Bd = B * dt + (A @ B) * (dt**2 * 0.5)
 
-# Subplot 3: Psi
-axs[2].plot(t, np.rad2deg(psi_hist), 'b-', label='ψ real (°)', linewidth=2)
-axs[2].plot(t, np.rad2deg(psi_est_hist), 'r--', label='ψ estimado (°)', linewidth=2)
-axs[2].plot(t, np.rad2deg(psi_meas_hist), 'g.', alpha=0.3, markersize=1, label='ψ medido (°)')
-axs[2].plot(t, np.rad2deg(r_psi), 'k--', alpha=0.6, label='ref ψ')
-axs[2].set_ylabel('ψ (°)')
-axs[2].legend()
-axs[2].grid(True)
+    return Ad, Bd
 
-# Subplot 4: Velocidades angulares (p, q)
-axs[3].plot(t, p_hist, 'b-', label='p real (rad/s)', linewidth=2)
-axs[3].plot(t, p_est_hist, 'r--', label='p estimado (rad/s)', linewidth=2)
-axs[3].plot(t, q_hist, 'b-', alpha=0.7, label='q real (rad/s)', linewidth=2)
-axs[3].plot(t, q_est_hist, 'r--', alpha=0.7, label='q estimado (rad/s)', linewidth=2)
-axs[3].set_ylabel('p, q (rad/s)')
-axs[3].legend()
-axs[3].grid(True)
 
-# Subplot 5: Torques de Controle e Distúrbio (Roll e Pitch)
-axs[4].plot(t, u_hist[:,0], label='τφ controle')
-axs[4].plot(t, dist_hist[:,0], '--', label='τφ distúrbio')
-axs[4].plot(t, u_hist[:,1], label='τθ controle')
-axs[4].plot(t, dist_hist[:,1], '--', label='τθ distúrbio')
-axs[4].set_ylabel('Torques φ, θ (Nm)')
-axs[4].legend()
-axs[4].grid(True)
+def get_rotation_matrix(phi, theta, psi):
+    cphi, sphi = np.cos(phi), np.sin(phi)
+    cth, sth = np.cos(theta), np.sin(theta)
+    cpsi, spsi = np.cos(psi), np.sin(psi)
 
-# Subplot 6: Torque de Controle e Distúrbio (Yaw)
-axs[5].plot(t, u_hist[:,2], label='τψ controle')
-axs[5].plot(t, dist_hist[:,2], '--', label='τψ distúrbio')
-axs[5].set_ylabel('Torque ψ (Nm)')
-axs[5].set_xlabel('Tempo (s)')
-axs[5].legend()
-axs[5].grid(True)
+    Rx = np.array([[1, 0, 0], [0, cphi, -sphi], [0, sphi, cphi]])
+    Ry = np.array([[cth, 0, sth], [0, 1, 0], [-sth, 0, cth]])
+    Rz = np.array([[cpsi, -spsi, 0], [spsi, cpsi, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+# ==========================================
+# 3. SIMULAÇÃO DO SISTEMA
+# ==========================================
+def simulate():
+    time_sim = 20.0
+    steps = int(time_sim / dt)
+    state = np.zeros(12)
+
+    u_max = b_coeff * MAX_OMEGA_SQ * 4
+    erro_max = 0.5
+    kp_z = (u_max - g * m) / (erro_max * m) * 0.8
+
+    # kd >= 2*sqrt(kp) para garantir amortecimento crítico ou superamortecido
+    kd_z = 2 * np.sqrt(kp_z)
+
+    pid_vx = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt, limit=15.0)
+    pid_vy = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt, limit=15.0)
+    pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt, limit=15.0)
+
+    history = {
+        "t": [],
+        "x": [],
+        "y": [],
+        "z": [],
+        "vx": [],
+        "vy": [],
+        "vz": [],
+        "phi": [],
+        "theta": [],
+        "psi": [],
+        "wind_x": [],
+        "wind_y": [],
+        "wind_z": [],
+        "rpm1": [],
+        "rpm2": [],
+        "rpm3": [],
+        "rpm4": [],
+    }
+
+    K_prev = np.zeros((3, 6))
+
+    for step in range(steps):
+        t = step * dt
+        vx, vy, vz = state[3], state[4], state[5]
+        phi, theta, psi = state[6], state[7], state[8]
+        p, q, r = state[9], state[10], state[11]
+        z = state[2]
+
+        Vx_ref, Vy_ref, Z_ref = 0.0, 0.0, 1.0
+
+        # Perturbação de Vento
+        w_x = np.random.normal(0.0, 0.2)
+        w_y = np.random.normal(0.0, 0.2)
+        w_z = np.random.normal(0.0, 0.1)
+
+        if 2.0 <= t <= 3.5:
+            # Aumentei um pouco a rajada para forçar os motores a baterem no teto de 31k
+            w_x += np.random.normal(5.0, 1.5) * 0.2
+            w_y += np.random.normal(-4.0, 1.0) * 0.2
+            w_z += np.random.normal(-1.0, 0.5) * 0.2
+
+        # PID -> Referências Ideais
+        ux = pid_vx.update(Vx_ref - vx)
+        uy = pid_vy.update(Vy_ref - vy)
+        uz = pid_z.update(Z_ref - z)
+
+        theta_ref = np.arctan2(ux, uz + g)
+        phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
+
+        T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
+
+        # SDRE -> Torques Ideais
+        Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
+        try:
+            P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
+            K = np.linalg.inv(R + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+            K_prev = K
+        except np.linalg.LinAlgError:
+            K = K_prev
+
+        x_att = np.array([phi, theta, psi, p, q, r])
+        x_ref = np.array([phi_ref, theta_ref, 0.0, 0, 0, 0])
+        tau_ideal = -K @ (x_att - x_ref)
+
+        # ========================================================
+        # O "CLAMP" - LIMITANDO RPM E EXTRAINDO AS FORÇAS REAIS
+        # ========================================================
+        efforts_ideal = np.array([T_ideal, tau_ideal[0], tau_ideal[1], tau_ideal[2]])
+
+        # Converte para omega quadrado ideal
+        omega_sq_ideal = M_inv @ efforts_ideal
+
+        # Satura as velocidades dos motores: mínimo 0, máximo MAX_OMEGA_SQ (31086 RPM)
+        omega_sq_real = np.clip(omega_sq_ideal, 0.0, MAX_OMEGA_SQ)
+
+        # Converte de volta para RPM apenas para plotagem
+        rpms = np.sqrt(omega_sq_real) * (60.0 / (2 * np.pi))
+
+        # Recalcula as forças REAIS que o drone conseguiu gerar (Motor Saturation)
+        efforts_real = M_mixer @ omega_sq_real
+        T_real = efforts_real[0]
+        tau_real = efforts_real[1:4]
+        # ========================================================
+
+        # Dinâmica Translacional + Vento (Usando T_real)
+        dvx = (T_real / m) * (np.sin(theta) * np.cos(phi)) + w_x
+        dvy = (T_real / m) * (-np.sin(phi)) + w_y
+        dvz = (T_real / m) * (np.cos(theta) * np.cos(phi)) - g + w_z
+
+        # Dinâmica Rotacional (Usando tau_real)q
+        dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q * r
+        dq = tau_real[1] / Iyy + ((Izz - Ixx) / Iyy) * p * r
+        dr = tau_real[2] / Izz + ((Ixx - Iyy) / Izz) * p * q
+
+        dphi = p + q * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
+        dtheta = q * np.cos(phi) - r * np.sin(phi)
+        dpsi = q * np.sin(phi) / np.cos(theta) + r * np.cos(phi) / np.cos(theta)
+
+        # Integração
+        state[0] += state[3] * dt
+        state[1] += state[4] * dt
+        state[2] += state[5] * dt
+        state[3] += dvx * dt
+        state[4] += dvy * dt
+        state[5] += dvz * dt
+        state[6] += dphi * dt
+        state[7] += dtheta * dt
+        state[8] += dpsi * dt
+        state[9] += dp * dt
+        state[10] += dq * dt
+        state[11] += dr * dt
+
+        # Histórico
+        history["t"].append(t)
+        history["x"].append(state[0])
+        history["y"].append(state[1])
+        history["z"].append(state[2])
+        history["vx"].append(state[3])
+        history["vy"].append(state[4])
+        history["vz"].append(state[5])
+        history["phi"].append(state[6])
+        history["theta"].append(state[7])
+        history["psi"].append(state[8])
+        history["wind_x"].append(w_x)
+        history["wind_y"].append(w_y)
+        history["wind_z"].append(w_z)
+        history["rpm1"].append(rpms[0])
+        history["rpm2"].append(rpms[1])
+        history["rpm3"].append(rpms[2])
+        history["rpm4"].append(rpms[3])
+
+    return history
+
+
+history = simulate()
+
+# ==========================================
+# 4. GRÁFICOS ESTÁTICOS
+# ==========================================
+fig1 = plt.figure(figsize=(14, 14))
+
+plt.subplot(4, 1, 1)
+plt.plot(
+    history["t"], history["wind_x"], label="Vento em X", color="darkred", alpha=0.7
+)
+plt.plot(
+    history["t"], history["wind_y"], label="Vento em Y", color="darkgreen", alpha=0.7
+)
+plt.plot(
+    history["t"], history["wind_z"], label="Vento em Z", color="darkblue", alpha=0.7
+)
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2, label="Rajada Forte")
+plt.title("Perturbação de Vento Injetada")
+plt.ylabel("Aceleração (m/s²)")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.subplot(4, 1, 2)
+plt.plot(history["t"], history["vx"], label="Vx Real", color="r")
+plt.plot(history["t"], history["vy"], label="Vy Real", color="g")
+plt.plot(history["t"], history["z"], label="Z Real (Altitude)", color="b")
+plt.axhline(1.0, color="black", linestyle="--", linewidth=1, label="Ref Z (1m)")
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("Efeito do Vento nas Velocidades e Altitude")
+plt.ylabel("m/s e m")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.subplot(4, 1, 3)
+plt.plot(history["t"], np.degrees(history["phi"]), label="Roll ($\phi$)", color="g")
+plt.plot(
+    history["t"], np.degrees(history["theta"]), label="Pitch ($\\theta$)", color="r"
+)
+plt.plot(history["t"], np.degrees(history["psi"]), label="Yaw ($\psi$)", color="b")
+plt.axhline(0, color="black", linestyle="--", linewidth=1)
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("Reação de Atitude Comandada (Graus)")
+plt.ylabel("Ângulo (graus)")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.subplot(4, 1, 4)
+plt.plot(history["t"], history["rpm1"], label="Motor 1 (Front-Dir CW)", color="orange")
+plt.plot(history["t"], history["rpm2"], label="Motor 2 (Tras-Dir CCW)", color="purple")
+plt.plot(history["t"], history["rpm3"], label="Motor 3 (Tras-Esq CW)", color="cyan")
+plt.plot(
+    history["t"], history["rpm4"], label="Motor 4 (Front-Esq CCW)", color="magenta"
+)
+plt.axhline(
+    31086, color="red", linestyle="--", linewidth=2, label="Limite Físico (31.086 RPM)"
+)
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("Atuação Física: Saturação de Rotação dos Motores")
+plt.xlabel("Tempo (s)")
+plt.ylabel("Rotação (RPM)")
+plt.legend(loc="lower right")
+plt.grid(True)
 
 plt.tight_layout()
-plt.show()
 
-# Animação 3D (usando estados reais)
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-L = 0.5
-arms = np.array([[ L,0,0], [-L,0,0], [0, L,0], [0,-L,0]])
+# ==========================================
+# 5. ANIMAÇÃO 3D
+# ==========================================
+fig2 = plt.figure(figsize=(10, 8))
+ax = fig2.add_subplot(111, projection="3d")
+ax.set_title("Visualização 3D - Drone Quadricóptero")
 
-def update(k):
-    ax.clear()
-    phi = phi_hist[k]; theta = theta_hist[k]; psi = psi_hist[k]
-    # Rotação ZYX
-    Rz = np.array([[np.cos(psi), -np.sin(psi), 0],
-                   [np.sin(psi),  np.cos(psi), 0],
-                   [0, 0, 1]])
-    Ry = np.array([[ np.cos(theta), 0, np.sin(theta)],
-                   [0, 1, 0],
-                   [-np.sin(theta), 0, np.cos(theta)]])
-    Rx = np.array([[1, 0, 0],
-                   [0, np.cos(phi), -np.sin(phi)],
-                   [0, np.sin(phi),  np.cos(phi)]])
-    R = Rz @ Ry @ Rx
-    pts = (R @ arms.T).T
-    ax.plot([pts[0,0], pts[1,0]], [pts[0,1], pts[1,1]], [pts[0,2], pts[1,2]], 'r-')
-    ax.plot([pts[2,0], pts[3,0]], [pts[2,1], pts[3,1]], [pts[2,2], pts[3,2]], 'b-')
-    ax.set_xlim(-1.5,1.5); ax.set_ylim(-1.5,1.5); ax.set_zlim(-0.5,0.5)
-    ax.set_title(f'Tempo: {t[k]:.2f} s')
+hx, hy, hz = np.array(history["x"]), np.array(history["y"]), np.array(history["z"])
+hphi, htheta, hpsi = (
+    np.array(history["phi"]),
+    np.array(history["theta"]),
+    np.array(history["psi"]),
+)
 
-ani = FuncAnimation(fig, update, frames=len(t), interval=1)
+lim = max(np.max(np.abs(hx)), np.max(np.abs(hy)), 1.0)
+ax.set_xlim([-lim, lim])
+ax.set_ylim([-lim, lim])
+ax.set_zlim([-lim, lim])
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+ax.set_zlabel("Z (m)")
+
+L = lim * 0.15
+arm1 = np.array([L, 0, 0])
+arm2 = np.array([-L, 0, 0])
+arm3 = np.array([0, L, 0])
+arm4 = np.array([0, -L, 0])
+
+(line_x,) = ax.plot([], [], [], "r-", lw=4, label="Eixo X (Pitch)")
+(line_y,) = ax.plot([], [], [], "b-", lw=4, label="Eixo Y (Roll)")
+(path,) = ax.plot([], [], [], "k--", alpha=0.5, label="Trajetória")
+ax.legend()
+
+
+def update_anim(frame):
+    path.set_data(hx[:frame], hy[:frame])
+    path.set_3d_properties(hz[:frame])
+
+    R = get_rotation_matrix(hphi[frame], htheta[frame], hpsi[frame])
+    p_center = np.array([hx[frame], hy[frame], hz[frame]])
+
+    p1 = p_center + R @ arm1
+    p2 = p_center + R @ arm2
+    p3 = p_center + R @ arm3
+    p4 = p_center + R @ arm4
+
+    line_x.set_data([p1[0], p2[0]], [p1[1], p2[1]])
+    line_x.set_3d_properties([p1[2], p2[2]])
+
+    line_y.set_data([p3[0], p4[0]], [p3[1], p4[1]])
+    line_y.set_3d_properties([p3[2], p4[2]])
+
+    return line_x, line_y, path
+
+
+ani = animation.FuncAnimation(
+    fig2, update_anim, frames=np.arange(0, len(hx), 2), interval=20, blit=False
+)
 plt.show()
