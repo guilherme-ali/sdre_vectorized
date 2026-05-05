@@ -17,10 +17,10 @@ Este projeto implementa um controlador LQR adaptativo baseado na técnica SDRE p
 
 ## 🔧 Hardware Suportado
 
-- **Microcontrolador**: ESP32 (240MHz dual-core)
+- **Microcontrolador**: ESP32 (240MHz dual-core) - *Idealmente a placa **ESP32 Drone da Espressif***
 - **IMU**: MPU6050
 - **Magnetômetro**: HMC5883L / QMC5883L (opcional)
-- **ESCs**: PWM padrão ou OneShot125
+- **ESCs**: PWM padrão
 - **Frame**: Quadricóptero em configuração X
 
 ## 📁 Estrutura do Projeto
