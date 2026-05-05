@@ -9,7 +9,6 @@
 #include <AutoLQR.h>
 #include "PIDController.h"
 #include <MadgwickAHRS.h>
-#include "KalmanFilter.h"
 #include <Wire.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"

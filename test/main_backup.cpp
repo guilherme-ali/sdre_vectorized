@@ -9,7 +9,6 @@
 #include <AutoLQR.h>
 #include "PIDController.h"
 #include <MadgwickAHRS.h>
-#include "KalmanFilter.h"
 #include <Wire.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -21,7 +20,7 @@ const bool DEBUG_MODE = false;
 
 // ===== FLAG DE TELEMETRIA =====
 // Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
-const bool PRINT_TELEMETRY = true;
+const bool PRINT_TELEMETRY = false;
 // ==============================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -331,16 +330,22 @@ void setup()
     filter.begin(1.0f / SAMPLING_TIME_S);
     
     Serial.println("Stabilizing filter to get initial Yaw...");
-    for (int i = 0; i < 200; i++) {
+    // Ler os sensores algumas vezes para descartar leituras iniciais instáveis
+    for (int i = 0; i < 10; i++) {
         read_MPU6050(mpu, ax, ay, az, gx, gy, gz, accel_offset_x, accel_offset_y, accel_offset_z, gyro_offset_x, gyro_offset_y, gyro_offset_z);
-        if (USE_MAGNETOMETER) {
-            read_QMC5883L(mx, my, mz);
-            filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az, mx, my, mz);
-        } else {
-            filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, ax, ay, az);
-        }
-        delay(20);
+        if (USE_MAGNETOMETER) read_QMC5883L(mx, my, mz);
+        delay(10);
     }
+    
+    // Acelerar a convergência do quaternion passando as leituras estáticas várias vezes (com gyro=0)
+    for (int i = 0; i < 2000; i++) {
+        if (USE_MAGNETOMETER) {
+            filter.update(0.0f, 0.0f, 0.0f, ax, ay, az, mx, my, mz);
+        } else {
+            filter.updateIMU(0.0f, 0.0f, 0.0f, ax, ay, az);
+        }
+    }
+    
     initial_yaw = filter.getYawRadians();
     Serial.printf("Initial Yaw locked at: %.2f degrees\n", initial_yaw * RAD_TO_DEG);
 
@@ -499,7 +504,7 @@ void loop(){
         theta_desired = remote_command.pitch * DEG_TO_RAD;
         yaw_desired = remote_command.yaw * DEG_TO_RAD;
 
-        thrust = (remote_command.thrust / 65535.0f) * MAX_THRUST * 4; // 4 motores
+        thrust = (remote_command.thrust / 65000.0f) * MAX_THRUST * 4; // 4 motores
     } else {
         evx = rvx - 0;
         evy = rvy - 0;
@@ -641,7 +646,7 @@ void loop(){
                 Serial.printf("     Pitch:  %+.3f\n", remote_command.pitch);
                 Serial.printf("     Yaw:    %+.3f\n", remote_command.yaw);
                 Serial.printf("     Thrust: %d (%.1f%%)\n", remote_command.thrust, 
-                             (remote_command.thrust / 60000.0f) * 100.0f);
+                             (remote_command.thrust / 65000.0f) * 100.0f);
                 Serial.println("   Setpoints (rad):");
                 Serial.printf("     φ_desired: %+.4f\n", phi_desired);
                 Serial.printf("     θ_desired: %+.4f\n", theta_desired);
