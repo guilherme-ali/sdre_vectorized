@@ -55,7 +55,7 @@ const float Ixx = 16.57e-6;  // 0.000021 kg·m² (roll)
 const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
 const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
-const float m = 0.040;     // 40g
+const float m = 0.04690f;     // 46.9g
 const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
 const float SAMPLING_TIME_S = 0.02f; // 20 ms
 const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
@@ -63,7 +63,7 @@ float omega_r = 0;
 
 // Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
 
-const float MOTOR_B_COEFF = 1.11e-8f;   // Coeficiente de empuxo MEDIDO (regressão: F = 1.11E-08*ω² - 5.09E-04) [N/(rad/s)²]
+const float MOTOR_B_COEFF = 1.77e-8f;   // Coeficiente de empuxo MEDIDO (regressão: F = 1.11E-08*ω² - 5.09E-04) [N/(rad/s)²]
 const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²] (estimado)
 
 
@@ -510,10 +510,10 @@ void loop(){
         evy = rvy - 0;
         evz = rvz - 0;
 
-        theta_desired = atan(evx / (evz + gravity));
-        phi_desired = -atan((evy*cos(theta_desired)) / (evz + gravity));
+        theta_desired = 0;
+        phi_desired = 0;
         yaw_desired = 0;
-        thrust = m * (evz + gravity) / (cos(theta_desired) * cos(phi_desired));
+        thrust = 0;
     }
     t_control_logic = micros() - t_checkpoint;
     t_checkpoint = micros();
