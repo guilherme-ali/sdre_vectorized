@@ -19,8 +19,17 @@ Omega_r = 0.0  # Velocidade angular do rotor
 x0 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 
 # Matrizes de ponderação para a função de custo
-Q = np.diag([1, 1, 1, 100.0, 100.0, 100.0])  # 6x6
-R = np.eye(3) * 0.1  # 3x3
+Q = np.diag(
+    [
+        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # p
+        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # q
+        1.0 / ((90.0 * np.pi / 180.0) ** 2),  # r
+        1.0 / ((60.0 * np.pi / 180.0) ** 2),  # phi
+        1.0 / ((60.0 * np.pi / 180.0) ** 2),  # theta
+        1.0 / ((90.0 * np.pi / 180.0) ** 2),  # psi
+    ]
+)
+R = np.eye(3) * 1.0  # 3x3
 
 # Matriz de entrada do sistema B (6x3)
 B = np.array(
@@ -36,12 +45,12 @@ B = np.array(
 
 # Parâmetros de simulação
 t_span = [0, 1]
-Ts = 0.012  # Período de amostragem (100 amostras por segundo)
+Ts = 0.02  # Período de amostragem (20 ms, igual ao main.cpp)
 num_steps = int((t_span[1] - t_span[0]) / Ts) + 1
 t_eval = np.linspace(t_span[0], t_span[1], num_steps)
 
 # Valores dos parâmetros para testar
-amostras = 75
+amostras = 10
 extremidades = 1.0
 param1_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha1
 param2_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha2
