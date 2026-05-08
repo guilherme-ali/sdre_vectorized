@@ -10,12 +10,14 @@ Ixx = 16.57e-6
 Iyy = 16.57e-6
 Izz = 29.80e-6
 Ir = 1.02e-7
-m = 0.040  # 40g
+m = 0.0469  # 46.9g
 g = 9.80665
-dt = 0.02  # 20ms
+dt_sim = 0.01  # Simulação base (100Hz)
+dt_sdre = 0.02  # SDRE a 50Hz
+dt_pid = 0.1  # PID a 20Hz
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
-b_coeff = 1.31e-8  # Coeficiente de Empuxo
+b_coeff = 1.77e-8  # Coeficiente de Empuxo
 d_coeff = 0.05 * b_coeff  # Coeficiente de Arrasto
 L_arm = 0.060  # 60mm
 L_eff = L_arm * np.sin(np.pi / 4)  # Braço efetivo para config em 'X'
@@ -125,8 +127,8 @@ def get_sdre_matrices(roll, pitch, yaw, p, q, r, omega_r=0.0):
     B[5, 2] = 1.0 / Izz
 
     A2 = A @ A
-    Ad = np.eye(6) + A * dt + A2 * (dt**2 * 0.5)
-    Bd = B * dt + (A @ B) * (dt**2 * 0.5)
+    Ad = np.eye(6) + A * dt_sdre + A2 * (dt_sdre**2 * 0.5)
+    Bd = B * dt_sdre + (A @ B) * (dt_sdre**2 * 0.5)
 
     return Ad, Bd
 
@@ -147,7 +149,7 @@ def get_rotation_matrix(phi, theta, psi):
 # ==========================================
 def simulate():
     time_sim = 20.0
-    steps = int(time_sim / dt)
+    steps = int(time_sim / dt_sim)
     state = np.zeros(12)
 
     u_max = b_coeff * MAX_OMEGA_SQ * 4
@@ -157,9 +159,9 @@ def simulate():
     # kd >= 2*sqrt(kp) para garantir amortecimento crítico ou superamortecido
     kd_z = 2 * np.sqrt(kp_z)
 
-    pid_vx = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt, limit=15.0)
-    pid_vy = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt, limit=15.0)
-    pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt, limit=15.0)
+    pid_vx = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt_pid, limit=15.0)
+    pid_vy = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt_pid, limit=15.0)
+    pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt_pid, limit=15.0)
 
     history = {
         "t": [],
@@ -183,8 +185,12 @@ def simulate():
 
     K_prev = np.zeros((3, 6))
 
+    phi_ref, theta_ref = 0.0, 0.0
+    T_ideal = m * g
+    tau_ideal = np.zeros(3)
+
     for step in range(steps):
-        t = step * dt
+        t = step * dt_sim
         vx, vy, vz = state[3], state[4], state[5]
         phi, theta, psi = state[6], state[7], state[8]
         p, q, r = state[9], state[10], state[11]
@@ -203,28 +209,30 @@ def simulate():
             w_y += np.random.normal(-4.0, 1.0) * 0.2
             w_z += np.random.normal(-1.0, 0.5) * 0.2
 
-        # PID -> Referências Ideais
-        ux = pid_vx.update(Vx_ref - vx)
-        uy = pid_vy.update(Vy_ref - vy)
-        uz = pid_z.update(Z_ref - z)
+        # PID -> Referências Ideais (20Hz)
+        if step % int(round(dt_pid / dt_sim)) == 0:
+            ux = pid_vx.update(Vx_ref - vx)
+            uy = pid_vy.update(Vy_ref - vy)
+            uz = pid_z.update(Z_ref - z)
 
-        theta_ref = np.arctan2(ux, uz + g)
-        phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
+            theta_ref = np.arctan2(ux, uz + g)
+            phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
 
-        T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
+            T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
 
-        # SDRE -> Torques Ideais
-        Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
-        try:
-            P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
-            K = np.linalg.inv(R + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
-            K_prev = K
-        except np.linalg.LinAlgError:
-            K = K_prev
+        # SDRE -> Torques Ideais (50Hz)
+        if step % int(round(dt_sdre / dt_sim)) == 0:
+            Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
+            try:
+                P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
+                K = np.linalg.inv(R + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+                K_prev = K
+            except np.linalg.LinAlgError:
+                K = K_prev
 
-        x_att = np.array([phi, theta, psi, p, q, r])
-        x_ref = np.array([phi_ref, theta_ref, 0.0, 0, 0, 0])
-        tau_ideal = -K @ (x_att - x_ref)
+            x_att = np.array([phi, theta, psi, p, q, r])
+            x_ref = np.array([phi_ref, theta_ref, 0.0, 0, 0, 0])
+            tau_ideal = -K @ (x_att - x_ref)
 
         # ========================================================
         # O "CLAMP" - LIMITANDO RPM E EXTRAINDO AS FORÇAS REAIS
@@ -261,18 +269,18 @@ def simulate():
         dpsi = q * np.sin(phi) / np.cos(theta) + r * np.cos(phi) / np.cos(theta)
 
         # Integração
-        state[0] += state[3] * dt
-        state[1] += state[4] * dt
-        state[2] += state[5] * dt
-        state[3] += dvx * dt
-        state[4] += dvy * dt
-        state[5] += dvz * dt
-        state[6] += dphi * dt
-        state[7] += dtheta * dt
-        state[8] += dpsi * dt
-        state[9] += dp * dt
-        state[10] += dq * dt
-        state[11] += dr * dt
+        state[0] += state[3] * dt_sim
+        state[1] += state[4] * dt_sim
+        state[2] += state[5] * dt_sim
+        state[3] += dvx * dt_sim
+        state[4] += dvy * dt_sim
+        state[5] += dvz * dt_sim
+        state[6] += dphi * dt_sim
+        state[7] += dtheta * dt_sim
+        state[8] += dpsi * dt_sim
+        state[9] += dp * dt_sim
+        state[10] += dq * dt_sim
+        state[11] += dr * dt_sim
 
         # Histórico
         history["t"].append(t)
