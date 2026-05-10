@@ -367,10 +367,10 @@ void displayStates(float states[]) {
 }
 
 void displayControlSignals(float u_signal[], float thrust_signal) {
-    Serial.print("u1:"); Serial.print(u_signal[0]);
-    Serial.print(",u2:"); Serial.print(u_signal[1]);
-    Serial.print(",u3:"); Serial.print(u_signal[2]);
-    Serial.print(",T:"); Serial.println(thrust_signal);
+    Serial.print("u1:"); Serial.print(u_signal[0], 6);
+    Serial.print(",u2:"); Serial.print(u_signal[1], 6);
+    Serial.print(",u3:"); Serial.print(u_signal[2], 8); // u3 costuma ser extremamente pequeno por causa do Yaw
+    Serial.print(",T:"); Serial.println(thrust_signal, 4);
 }
 
 void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff, float L_arm) {
