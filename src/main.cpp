@@ -15,12 +15,12 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DE TELEMETRIA =====
 // Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
-const bool PRINT_TELEMETRY = false;
+const bool PRINT_TELEMETRY = true;
 // ==============================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -126,10 +126,19 @@ float Q[STATE_SIZE * STATE_SIZE] = {
     0, 0, 0, 0, 0, Q_66
 };
 
+// Maximos torques físicos (aproximados) do drone:
+const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_yaw = 4 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
+
+const float R_11 = 1.0f / (roll_max_rad * roll_max_rad);
+const float R_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
+const float R_33 = 1.0f / (yaw_max_rad * yaw_max_rad);
+
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
-    1, 0, 0,
-    0, 1, 0,
-    0, 0, 1,
+    R_11, 0, 0,
+    0, R_22, 0,
+    0, 0, R_33
 };
 
 // Controladores
@@ -539,9 +548,9 @@ void loop(){
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
-    // Atualiza omega_r para a próxima iteração (Voos 2006):
-    // omega_r = -ω1 + ω2 - ω3 + ω4  (motores CW: 1,3 / CCW: 2,4)
-    omega_r = -sqrtf(w1_sq) + sqrtf(w2_sq) - sqrtf(w3_sq) + sqrtf(w4_sq);
+    // Atualiza omega_r para a próxima iteração:
+    // omega_r = ω1 - ω2 + ω3 - ω4 (Motores CCW: 1 e 3 positivos, Motores CW: 2 e 4 negativos)
+    omega_r = sqrtf(w1_sq) - sqrtf(w2_sq) + sqrtf(w3_sq) - sqrtf(w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
 

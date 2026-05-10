@@ -282,10 +282,10 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
     // [ω3²]   [1/(4b)   1/(2bL)  -1/(2bL)  -1/(4d)] [u3]
     // [ω4²]   [1/(4b)   1/(2bL)   1/(2bL)   1/(4d)] [u4]
     
-    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 1
-    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 2
-    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 3
-    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 4
+    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 1 (FR)
+    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 2 (RR)
+    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 3 (RL)
+    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 4 (FL)
 
     // Garante que não há valores negativos (motores não podem girar ao contrário)
     if (w1_sq < 0) w1_sq = 0;
