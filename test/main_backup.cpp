@@ -15,7 +15,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
+const bool DEBUG_MODE = true;
 // ==========================
 
 // ===== FLAG DE TELEMETRIA =====
@@ -56,7 +56,7 @@ const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
 const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.04690f;     // 46.9g
-const float L_ARM = 0.060f; // 60mm - distância do centro ao motor (braço)
+const float L_ARM = 0.060f * 0.70710678f; // 60mm * sin(45°) - braço efetivo para X-quad
 const float SAMPLING_TIME_S = 0.02f; // 20 ms
 const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 float omega_r = 0;
@@ -184,7 +184,7 @@ bool motors_armed_by_remote = false; // Indica se motores foram armados pelo con
 bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
 bool tilt_failsafe_latched = false; // Trava de segurança por inclinacao excessiva (so libera com reset)
 
-const float MAX_SAFE_TILT_DEG = 45.0f;
+const float MAX_SAFE_TILT_DEG = 80.0f;
 const float MAX_SAFE_TILT_RAD = MAX_SAFE_TILT_DEG * DEG_TO_RAD;
 
 // Callbacks para comunicação WiFi
@@ -476,9 +476,9 @@ void loop(){
         Serial.println("   Motores desligados. Reinicie o drone para rearmar.");
     }
 
-    float p = gx + (gz*cos(roll) + gy*sin(roll))*tan(pitch);
-    float q = gy*cos(roll) + gz*sin(roll);
-    float r = (gz*cos(roll) + gy*sin(roll))/cos(pitch);
+    float p = gx;
+    float q = gy;
+    float r = gz;
 
     float z_measurement[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
     t_angles = micros() - t_checkpoint;
