@@ -131,9 +131,10 @@ const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; //
 const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
 const float max_tau_yaw = 4 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
 
-const float R_11 = 1.0f / (roll_max_rad * roll_max_rad);
-const float R_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
-const float R_33 = 1.0f / (yaw_max_rad * yaw_max_rad);
+// Regra de Bryson para R: R_ii = 1 / (max_torque_i)^2
+const float R_11 = 1.0f / (max_tau_roll  * max_tau_roll);
+const float R_22 = 1.0f / (max_tau_pitch * max_tau_pitch);
+const float R_33 = 1.0f / (max_tau_yaw   * max_tau_yaw);
 
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
     R_11, 0, 0,
@@ -548,9 +549,10 @@ void loop(){
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
-    // Atualiza omega_r para a próxima iteração:
-    // omega_r = ω1 - ω2 + ω3 - ω4 (Motores CCW: 1 e 3 positivos, Motores CW: 2 e 4 negativos)
-    omega_r = sqrtf(w1_sq) - sqrtf(w2_sq) + sqrtf(w3_sq) - sqrtf(w4_sq);
+    // Atualiza omega_r para a próxima iteração (acoplamento giroscópico, Ir desprezível):
+    // Motores CW: 1 (FR) e 3 (RL) | Motores CCW: 2 (RR) e 4 (FL)
+    // Convenção sign_i = +1 para CCW, -1 para CW (Σ sign_i · ω_i):
+    omega_r = -sqrtf(w1_sq) + sqrtf(w2_sq) - sqrtf(w3_sq) + sqrtf(w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
 

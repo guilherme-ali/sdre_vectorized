@@ -39,11 +39,11 @@ bool MotorControl::begin()
     Serial.println("Sistema de controle de motores inicializado!");
     Serial.print("PWM Frequência: "); Serial.print(PWM_FREQUENCY); Serial.println(" Hz");
     Serial.print("PWM Resolução: "); Serial.print(PWM_RESOLUTION); Serial.println(" bits");
-    Serial.println("\nMapeamento de motores:");
-    Serial.print("Motor 1 (GPIO"); Serial.print(MOTOR_1_PIN); Serial.println(") - Frente-Direita");
-    Serial.print("Motor 2 (GPIO"); Serial.print(MOTOR_2_PIN); Serial.println(") - Frente-Esquerda");
-    Serial.print("Motor 3 (GPIO"); Serial.print(MOTOR_3_PIN); Serial.println(") - Trás-Direita");
-    Serial.print("Motor 4 (GPIO"); Serial.print(MOTOR_4_PIN); Serial.println(") - Trás-Esquerda");
+    Serial.println("\nMapeamento de motores (X-quad):");
+    Serial.print("Motor 1 (GPIO"); Serial.print(MOTOR_1_PIN); Serial.println(") - Frente-Direita (CW)");
+    Serial.print("Motor 2 (GPIO"); Serial.print(MOTOR_2_PIN); Serial.println(") - Tras-Direita  (CCW)");
+    Serial.print("Motor 3 (GPIO"); Serial.print(MOTOR_3_PIN); Serial.println(") - Tras-Esquerda (CW)");
+    Serial.print("Motor 4 (GPIO"); Serial.print(MOTOR_4_PIN); Serial.println(") - Frente-Esquerda (CCW)");
     Serial.println("=========================================");
     
     return true;

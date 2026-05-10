@@ -277,15 +277,17 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
     float u4 = u_torques[2];     // Torque de Guinada (Yaw) [N·m]
 
     // Matriz de alocação de controle (configuração X-quad):
+    // Sinais da coluna de yaw invertidos para casar com o sentido fisico
+    // (motores 2 e 4 CCW devem acelerar para u4 > 0).
     // [ω1²]   [1/(4b)  -1/(2bL)   1/(2bL)  -1/(4d)] [u1]
     // [ω2²] = [1/(4b)  -1/(2bL)  -1/(2bL)   1/(4d)] [u2]
     // [ω3²]   [1/(4b)   1/(2bL)  -1/(2bL)  -1/(4d)] [u3]
     // [ω4²]   [1/(4b)   1/(2bL)   1/(2bL)   1/(4d)] [u4]
-    
-    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 1 (FR)
-    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 2 (RR)
-    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 3 (RL)
-    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 4 (FL)
+
+    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 1 (FR, CW)
+    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 2 (RR, CCW)
+    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 3 (RL, CW)
+    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 4 (FL, CCW)
 
     // Garante que não há valores negativos (motores não podem girar ao contrário)
     if (w1_sq < 0) w1_sq = 0;
