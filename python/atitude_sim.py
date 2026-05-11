@@ -14,7 +14,7 @@ m = 0.0469  # 46.9g
 g = 9.80665
 dt_sim = 0.01  # Simulação base (100Hz)
 dt_sdre = 0.02  # SDRE a 50Hz
-dt_pid = 0.1  # PID a 10Hz
+dt_pid = 0.05  # PID a 10Hz
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
 b_coeff = 1.77e-8  # Coeficiente de Empuxo
@@ -47,6 +47,31 @@ M_mixer = np.array(
     ]
 )
 M_inv = np.linalg.inv(M_mixer)
+
+# Matriz de Mistura REAIS (simulando desbalanceamento de até 5% nos motores)
+error_percent = 0.05
+np.random.seed(42)  # Para resultados reprodutíveis
+b_coeffs_real = b_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
+d_coeffs_real = d_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
+
+M_mixer_real = np.array(
+    [
+        [b_coeffs_real[0], b_coeffs_real[1], b_coeffs_real[2], b_coeffs_real[3]],
+        [
+            -b_coeffs_real[0] * L_eff,
+            -b_coeffs_real[1] * L_eff,
+            b_coeffs_real[2] * L_eff,
+            b_coeffs_real[3] * L_eff,
+        ],
+        [
+            -b_coeffs_real[0] * L_eff,
+            b_coeffs_real[1] * L_eff,
+            b_coeffs_real[2] * L_eff,
+            -b_coeffs_real[3] * L_eff,
+        ],
+        [-d_coeffs_real[0], d_coeffs_real[1], -d_coeffs_real[2], d_coeffs_real[3]],
+    ]
+)
 
 # Matrizes de Peso do SDRE (Q e R)
 roll_max_rad = 15.0 * np.pi / 180.0
@@ -99,7 +124,7 @@ MAG_WORLD = np.array([np.cos(MAG_INCLINATION), 0.0, -np.sin(MAG_INCLINATION)])
 MAG_WORLD /= np.linalg.norm(MAG_WORLD)
 
 # Ganho β do filtro Madgwick (compromisso giroscópio × accel/mag)
-MADGWICK_BETA = 0.1
+MADGWICK_BETA = 0.04
 
 
 def madgwick_marg_update(q, gx, gy, gz, ax, ay, az, mx, my, mz, beta, dt):
@@ -359,8 +384,9 @@ def simulate():
     pid_vy = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt_pid, limit=15.0)
     pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt_pid, limit=15.0)
 
-    # pid_vx = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
-    # pid_vy = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
+    pid_vx = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
+    pid_vy = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
+    pid_z = PIDController(kp=0, ki=0, kd=0, dt=dt_pid, limit=15.0)
 
     history = {
         "t": [],
@@ -490,7 +516,7 @@ def simulate():
         rpms = np.sqrt(omega_sq_real) * (60.0 / (2 * np.pi))
 
         # Recalcula as forças REAIS que o drone conseguiu gerar (Motor Saturation)
-        efforts_real = M_mixer @ omega_sq_real
+        efforts_real = M_mixer_real @ omega_sq_real
         T_real = efforts_real[0]
         tau_real = efforts_real[1:4]
         T_real_prev = T_real
