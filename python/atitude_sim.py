@@ -73,6 +73,12 @@ M_mixer_real = np.array(
     ]
 )
 
+# Arrasto translacional (força de amortecimento linear F = -k_d·v)
+# Pequenos drones têm tipicamente 0.005–0.02 N·s/m.
+# O arrasto é adicionado tanto na dinâmica quanto no modelo do acelerômetro,
+# pois cria componente lateral no corpo que o Madgwick usa como cue de inclinação.
+K_DRAG_TRANS = 0.01  # N·s/m
+
 # Matrizes de Peso do SDRE (Q e R)
 roll_max_rad = 15.0 * np.pi / 180.0
 pitch_max_rad = 15.0 * np.pi / 180.0
@@ -265,19 +271,19 @@ def quat_to_euler(quat):
     return phi, theta, psi
 
 
-def simulate_sensors(state, T_real, w_x, w_y, w_z, R_wb):
+def simulate_sensors(state, a_cg_world, R_wb):
     """Gera leituras simuladas do MPU6050 (acel + giro) e QMC5883L (mag).
 
-    Acelerômetro mede força específica em corpo (sem o termo gravitacional puro):
-        f_world = (T/m) · R · ẑ_corpo + vento
-        a_corpo = R^T · f_world
+    Acelerômetro mede força específica: f = R^T · (a_cg - g_world).
+    Z-up: g_world = [0, 0, -g], logo f inclui o vetor de gravidade rotacionado no corpo.
+    Quando nivelado (a_cg=0): accel_body = [0, 0, g].
+    Quando inclinado (a_cg=0): accel_body = g·R^T·ẑ — cue de tilt para o Madgwick.
     """
     p_b, q_b, r_b = state[9], state[10], state[11]
 
-    f_world = (T_real / m) * R_wb @ np.array([0.0, 0.0, 1.0]) + np.array(
-        [w_x, w_y, w_z]
-    )
-    accel_body = R_wb.T @ f_world
+    g_world = np.array([0.0, 0.0, -g])
+    f_specific_world = a_cg_world - g_world
+    accel_body = R_wb.T @ f_specific_world
     accel_meas = accel_body + ACCEL_BIAS + np.random.normal(0.0, ACCEL_NOISE_STD, 3)
 
     gyro_meas = (
@@ -426,9 +432,9 @@ def simulate():
     T_ideal = m * g
     tau_ideal = np.zeros(3)
 
-    # Estado do filtro Madgwick (quaternion identidade) e empuxo aplicado anterior
+    # Estado do filtro Madgwick (quaternion identidade) e aceleração CG anterior
     quat = np.array([1.0, 0.0, 0.0, 0.0])
-    T_real_prev = m * g
+    a_cg_world_prev = np.array([0.0, 0.0, 0.0])
 
     for step in range(steps):
         t = step * dt_sim
@@ -455,7 +461,7 @@ def simulate():
         # ====================================================
         R_true = get_rotation_matrix(phi_t, theta_t, psi_t)
         accel_meas, gyro_meas, mag_meas = simulate_sensors(
-            state, T_real_prev, w_x, w_y, w_z, R_true
+            state, a_cg_world_prev, R_true
         )
         quat = madgwick_marg_update(
             quat,
@@ -519,13 +525,22 @@ def simulate():
         efforts_real = M_mixer_real @ omega_sq_real
         T_real = efforts_real[0]
         tau_real = efforts_real[1:4]
-        T_real_prev = T_real
         # ========================================================
 
-        # Dinâmica Translacional + Vento (Usando T_real e estado verdadeiro)
-        dvx = (T_real / m) * (np.sin(theta_t) * np.cos(phi_t)) + w_x
-        dvy = (T_real / m) * (-np.sin(phi_t)) + w_y
-        dvz = (T_real / m) * (np.cos(theta_t) * np.cos(phi_t)) - g + w_z
+        # Dinâmica Translacional + Vento + Arrasto (Usando T_real e estado verdadeiro)
+        drag_accel = (-K_DRAG_TRANS / m) * np.array([vx, vy, vz])
+        a_cg_world = np.array(
+            [
+                (T_real / m) * (np.sin(theta_t) * np.cos(phi_t)) + w_x + drag_accel[0],
+                (T_real / m) * (-np.sin(phi_t)) + w_y + drag_accel[1],
+                (T_real / m) * (np.cos(theta_t) * np.cos(phi_t))
+                - g
+                + w_z
+                + drag_accel[2],
+            ]
+        )
+        dvx, dvy, dvz = a_cg_world
+        a_cg_world_prev = a_cg_world
 
         # Dinâmica Rotacional (Usando tau_real)
         dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q_t * r_t
