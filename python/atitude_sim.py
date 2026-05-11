@@ -14,7 +14,7 @@ m = 0.0469  # 46.9g
 g = 9.80665
 dt_sim = 0.01  # Simulação base (100Hz)
 dt_sdre = 0.02  # SDRE a 50Hz
-dt_pid = 0.1  # PID a 20Hz
+dt_pid = 0.1  # PID a 10Hz
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
 b_coeff = 1.77e-8  # Coeficiente de Empuxo
@@ -49,12 +49,12 @@ M_mixer = np.array(
 M_inv = np.linalg.inv(M_mixer)
 
 # Matrizes de Peso do SDRE (Q e R)
-roll_max_rad = 60.0 * np.pi / 180.0
-pitch_max_rad = 60.0 * np.pi / 180.0
-yaw_max_rad = 90.0 * np.pi / 180.0
-p_max = 45.0 * np.pi / 180.0
-q_max = 45.0 * np.pi / 180.0
-r_max = 90.0 * np.pi / 180.0
+roll_max_rad = 15.0 * np.pi / 180.0
+pitch_max_rad = 15.0 * np.pi / 180.0
+yaw_max_rad = 30.0 * np.pi / 180.0
+p_max = 15.0 * np.pi / 180.0
+q_max = 15.0 * np.pi / 180.0
+r_max = 45.0 * np.pi / 180.0
 
 Q = np.diag(
     [
@@ -66,7 +66,203 @@ Q = np.diag(
         1.0 / (r_max**2),
     ]
 )
-R = np.eye(3)
+R_mat = np.eye(3)
+
+max_tau_roll = 2 * b_coeff * L_eff * MAX_OMEGA * MAX_OMEGA
+max_tau_pitch = 2 * b_coeff * L_eff * MAX_OMEGA * MAX_OMEGA
+max_tau_yaw = 4 * d_coeff * MAX_OMEGA * MAX_OMEGA
+
+R_mat = np.diag(
+    [
+        1.0 / (max_tau_roll**2),
+        1.0 / (max_tau_pitch**2),
+        1.0 / (max_tau_yaw**2),
+    ]
+)
+
+
+# ==========================================
+# 1B. SENSORES (MPU6050 + QMC5883L) E MADGWICK
+# ==========================================
+# Ruídos típicos do MPU6050 com DLPF @ ~98Hz
+GYRO_NOISE_STD = 0.01  # rad/s (~0.57 °/s)
+ACCEL_NOISE_STD = 0.10  # m/s²
+GYRO_BIAS = np.array([0.003, -0.002, 0.004])  # rad/s
+ACCEL_BIAS = np.array([0.05, -0.03, 0.08])  # m/s²
+
+# Ruído do QMC5883L (saída normalizada)
+MAG_NOISE_STD = 0.015
+
+# Inclinação magnética típica (Brasil ≈ -30°). ENU/Z-up: bz = -sin(inc)
+MAG_INCLINATION = np.deg2rad(-30.0)
+MAG_WORLD = np.array([np.cos(MAG_INCLINATION), 0.0, -np.sin(MAG_INCLINATION)])
+MAG_WORLD /= np.linalg.norm(MAG_WORLD)
+
+# Ganho β do filtro Madgwick (compromisso giroscópio × accel/mag)
+MADGWICK_BETA = 0.1
+
+
+def madgwick_marg_update(q, gx, gy, gz, ax, ay, az, mx, my, mz, beta, dt):
+    """Filtro Madgwick MARG (Magnetic, Angular Rate, Gravity).
+    Convenção Z-up coerente com a simulação. q = [w, x, y, z].
+    """
+    q1, q2, q3, q4 = q  # q1=w, q2=x, q3=y, q4=z
+
+    norm_a = np.sqrt(ax * ax + ay * ay + az * az)
+    if norm_a < 1e-9:
+        return q
+    ax, ay, az = ax / norm_a, ay / norm_a, az / norm_a
+
+    norm_m = np.sqrt(mx * mx + my * my + mz * mz)
+    if norm_m < 1e-9:
+        return q
+    mx, my, mz = mx / norm_m, my / norm_m, mz / norm_m
+
+    # Direção de referência do campo magnético terrestre (descontando inclinação atual)
+    _2q1mx = 2 * q1 * mx
+    _2q1my = 2 * q1 * my
+    _2q1mz = 2 * q1 * mz
+    _2q2mx = 2 * q2 * mx
+    hx = (
+        mx * q1 * q1
+        - _2q1my * q4
+        + _2q1mz * q3
+        + mx * q2 * q2
+        + 2 * q2 * my * q3
+        + 2 * q2 * mz * q4
+        - mx * q3 * q3
+        - mx * q4 * q4
+    )
+    hy = (
+        _2q1mx * q4
+        + my * q1 * q1
+        - _2q1mz * q2
+        + _2q2mx * q3
+        - my * q2 * q2
+        + my * q3 * q3
+        + 2 * q3 * mz * q4
+        - my * q4 * q4
+    )
+    _2bx = np.sqrt(hx * hx + hy * hy)
+    _2bz = (
+        -_2q1mx * q3
+        + _2q1my * q2
+        + mz * q1 * q1
+        + _2q2mx * q4
+        - mz * q2 * q2
+        + 2 * q3 * my * q4
+        - mz * q3 * q3
+        + mz * q4 * q4
+    )
+    _4bx = 2 * _2bx
+    _4bz = 2 * _2bz
+
+    # Gradiente da função objetivo (gravidade + bússola)
+    s1 = (
+        -2 * q3 * (2 * q2 * q4 - 2 * q1 * q3 - ax)
+        + 2 * q2 * (2 * q1 * q2 + 2 * q3 * q4 - ay)
+        - _2bz
+        * q3
+        * (_2bx * (0.5 - q3 * q3 - q4 * q4) + _2bz * (q2 * q4 - q1 * q3) - mx)
+        + (-_2bx * q4 + _2bz * q2)
+        * (_2bx * (q2 * q3 - q1 * q4) + _2bz * (q1 * q2 + q3 * q4) - my)
+        + _2bx
+        * q3
+        * (_2bx * (q1 * q3 + q2 * q4) + _2bz * (0.5 - q2 * q2 - q3 * q3) - mz)
+    )
+    s2 = (
+        2 * q4 * (2 * q2 * q4 - 2 * q1 * q3 - ax)
+        + 2 * q1 * (2 * q1 * q2 + 2 * q3 * q4 - ay)
+        - 4 * q2 * (1 - 2 * q2 * q2 - 2 * q3 * q3 - az)
+        + _2bz
+        * q4
+        * (_2bx * (0.5 - q3 * q3 - q4 * q4) + _2bz * (q2 * q4 - q1 * q3) - mx)
+        + (_2bx * q3 + _2bz * q1)
+        * (_2bx * (q2 * q3 - q1 * q4) + _2bz * (q1 * q2 + q3 * q4) - my)
+        + (_2bx * q4 - _4bz * q2)
+        * (_2bx * (q1 * q3 + q2 * q4) + _2bz * (0.5 - q2 * q2 - q3 * q3) - mz)
+    )
+    s3 = (
+        -2 * q1 * (2 * q2 * q4 - 2 * q1 * q3 - ax)
+        + 2 * q4 * (2 * q1 * q2 + 2 * q3 * q4 - ay)
+        - 4 * q3 * (1 - 2 * q2 * q2 - 2 * q3 * q3 - az)
+        + (-_4bx * q3 - _2bz * q1)
+        * (_2bx * (0.5 - q3 * q3 - q4 * q4) + _2bz * (q2 * q4 - q1 * q3) - mx)
+        + (_2bx * q2 + _2bz * q4)
+        * (_2bx * (q2 * q3 - q1 * q4) + _2bz * (q1 * q2 + q3 * q4) - my)
+        + (_2bx * q1 - _4bz * q3)
+        * (_2bx * (q1 * q3 + q2 * q4) + _2bz * (0.5 - q2 * q2 - q3 * q3) - mz)
+    )
+    s4 = (
+        2 * q2 * (2 * q2 * q4 - 2 * q1 * q3 - ax)
+        + 2 * q3 * (2 * q1 * q2 + 2 * q3 * q4 - ay)
+        + (-_4bx * q4 + _2bz * q2)
+        * (_2bx * (0.5 - q3 * q3 - q4 * q4) + _2bz * (q2 * q4 - q1 * q3) - mx)
+        + (-_2bx * q1 + _2bz * q3)
+        * (_2bx * (q2 * q3 - q1 * q4) + _2bz * (q1 * q2 + q3 * q4) - my)
+        + _2bx
+        * q2
+        * (_2bx * (q1 * q3 + q2 * q4) + _2bz * (0.5 - q2 * q2 - q3 * q3) - mz)
+    )
+    norm_s = np.sqrt(s1 * s1 + s2 * s2 + s3 * s3 + s4 * s4)
+    if norm_s < 1e-12:
+        return q
+    s1 /= norm_s
+    s2 /= norm_s
+    s3 /= norm_s
+    s4 /= norm_s
+
+    # Taxa de variação do quaternion (giroscópio + correção pelo gradiente)
+    qDot1 = 0.5 * (-q2 * gx - q3 * gy - q4 * gz) - beta * s1
+    qDot2 = 0.5 * (q1 * gx + q3 * gz - q4 * gy) - beta * s2
+    qDot3 = 0.5 * (q1 * gy - q2 * gz + q4 * gx) - beta * s3
+    qDot4 = 0.5 * (q1 * gz + q2 * gy - q3 * gx) - beta * s4
+
+    q1 += qDot1 * dt
+    q2 += qDot2 * dt
+    q3 += qDot3 * dt
+    q4 += qDot4 * dt
+    n = np.sqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4)
+    return np.array([q1, q2, q3, q4]) / n
+
+
+def quat_to_euler(quat):
+    """Quaternion [w,x,y,z] → (phi, theta, psi) na convenção ZYX."""
+    w, x, y, z = quat
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    phi = np.arctan2(sinr_cosp, cosr_cosp)
+    sinp = np.clip(2 * (w * y - z * x), -1.0, 1.0)
+    theta = np.arcsin(sinp)
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    psi = np.arctan2(siny_cosp, cosy_cosp)
+    return phi, theta, psi
+
+
+def simulate_sensors(state, T_real, w_x, w_y, w_z, R_wb):
+    """Gera leituras simuladas do MPU6050 (acel + giro) e QMC5883L (mag).
+
+    Acelerômetro mede força específica em corpo (sem o termo gravitacional puro):
+        f_world = (T/m) · R · ẑ_corpo + vento
+        a_corpo = R^T · f_world
+    """
+    p_b, q_b, r_b = state[9], state[10], state[11]
+
+    f_world = (T_real / m) * R_wb @ np.array([0.0, 0.0, 1.0]) + np.array(
+        [w_x, w_y, w_z]
+    )
+    accel_body = R_wb.T @ f_world
+    accel_meas = accel_body + ACCEL_BIAS + np.random.normal(0.0, ACCEL_NOISE_STD, 3)
+
+    gyro_meas = (
+        np.array([p_b, q_b, r_b]) + GYRO_BIAS + np.random.normal(0.0, GYRO_NOISE_STD, 3)
+    )
+
+    mag_body = R_wb.T @ MAG_WORLD
+    mag_meas = mag_body + np.random.normal(0.0, MAG_NOISE_STD, 3)
+
+    return accel_meas, gyro_meas, mag_meas
 
 
 # ==========================================
@@ -145,7 +341,7 @@ def get_rotation_matrix(phi, theta, psi):
 
 
 # ==========================================
-# 3. SIMULAÇÃO DO SISTEMA
+# 3. SIMULAÇÃO DO SISTEMA (com sensores + Madgwick)
 # ==========================================
 def simulate():
     time_sim = 20.0
@@ -163,6 +359,9 @@ def simulate():
     pid_vy = PIDController(kp=2.0, ki=0.1, kd=1.5, dt=dt_pid, limit=15.0)
     pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt_pid, limit=15.0)
 
+    # pid_vx = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
+    # pid_vy = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
+
     history = {
         "t": [],
         "x": [],
@@ -174,6 +373,9 @@ def simulate():
         "phi": [],
         "theta": [],
         "psi": [],
+        "phi_est": [],
+        "theta_est": [],
+        "psi_est": [],
         "wind_x": [],
         "wind_y": [],
         "wind_z": [],
@@ -181,6 +383,15 @@ def simulate():
         "rpm2": [],
         "rpm3": [],
         "rpm4": [],
+        "ax_meas": [],
+        "ay_meas": [],
+        "az_meas": [],
+        "gx_meas": [],
+        "gy_meas": [],
+        "gz_meas": [],
+        "mx_meas": [],
+        "my_meas": [],
+        "mz_meas": [],
     }
 
     K_prev = np.zeros((3, 6))
@@ -189,11 +400,15 @@ def simulate():
     T_ideal = m * g
     tau_ideal = np.zeros(3)
 
+    # Estado do filtro Madgwick (quaternion identidade) e empuxo aplicado anterior
+    quat = np.array([1.0, 0.0, 0.0, 0.0])
+    T_real_prev = m * g
+
     for step in range(steps):
         t = step * dt_sim
         vx, vy, vz = state[3], state[4], state[5]
-        phi, theta, psi = state[6], state[7], state[8]
-        p, q, r = state[9], state[10], state[11]
+        phi_t, theta_t, psi_t = state[6], state[7], state[8]
+        p_t, q_t, r_t = state[9], state[10], state[11]
         z = state[2]
 
         Vx_ref, Vy_ref, Z_ref = 0.0, 0.0, 1.0
@@ -209,7 +424,33 @@ def simulate():
             w_y += np.random.normal(-4.0, 1.0) * 0.2
             w_z += np.random.normal(-1.0, 0.5) * 0.2
 
-        # PID -> Referências Ideais (20Hz)
+        # ====================================================
+        # SENSORES + FILTRO MADGWICK (executa a cada passo, 100Hz)
+        # ====================================================
+        R_true = get_rotation_matrix(phi_t, theta_t, psi_t)
+        accel_meas, gyro_meas, mag_meas = simulate_sensors(
+            state, T_real_prev, w_x, w_y, w_z, R_true
+        )
+        quat = madgwick_marg_update(
+            quat,
+            gyro_meas[0],
+            gyro_meas[1],
+            gyro_meas[2],
+            accel_meas[0],
+            accel_meas[1],
+            accel_meas[2],
+            mag_meas[0],
+            mag_meas[1],
+            mag_meas[2],
+            MADGWICK_BETA,
+            dt_sim,
+        )
+        phi_est, theta_est, psi_est = quat_to_euler(quat)
+        # Taxas estimadas vêm direto do giroscópio (Madgwick não estima bias do giro)
+        p_est, q_est, r_est = gyro_meas[0], gyro_meas[1], gyro_meas[2]
+        # ====================================================
+
+        # PID -> Referências Ideais (10Hz)
         if step % int(round(dt_pid / dt_sim)) == 0:
             ux = pid_vx.update(Vx_ref - vx)
             uy = pid_vy.update(Vy_ref - vy)
@@ -220,17 +461,17 @@ def simulate():
 
             T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
 
-        # SDRE -> Torques Ideais (50Hz)
+        # SDRE -> Torques Ideais (50Hz) — usa estado ESTIMADO
         if step % int(round(dt_sdre / dt_sim)) == 0:
-            Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
+            Ad, Bd = get_sdre_matrices(phi_est, theta_est, psi_est, p_est, q_est, r_est)
             try:
-                P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R)
-                K = np.linalg.inv(R + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+                P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
+                K = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
                 K_prev = K
             except np.linalg.LinAlgError:
                 K = K_prev
 
-            x_att = np.array([phi, theta, psi, p, q, r])
+            x_att = np.array([phi_est, theta_est, psi_est, p_est, q_est, r_est])
             x_ref = np.array([phi_ref, theta_ref, 0.0, 0, 0, 0])
             tau_ideal = -K @ (x_att - x_ref)
 
@@ -252,21 +493,28 @@ def simulate():
         efforts_real = M_mixer @ omega_sq_real
         T_real = efforts_real[0]
         tau_real = efforts_real[1:4]
+        T_real_prev = T_real
         # ========================================================
 
-        # Dinâmica Translacional + Vento (Usando T_real)
-        dvx = (T_real / m) * (np.sin(theta) * np.cos(phi)) + w_x
-        dvy = (T_real / m) * (-np.sin(phi)) + w_y
-        dvz = (T_real / m) * (np.cos(theta) * np.cos(phi)) - g + w_z
+        # Dinâmica Translacional + Vento (Usando T_real e estado verdadeiro)
+        dvx = (T_real / m) * (np.sin(theta_t) * np.cos(phi_t)) + w_x
+        dvy = (T_real / m) * (-np.sin(phi_t)) + w_y
+        dvz = (T_real / m) * (np.cos(theta_t) * np.cos(phi_t)) - g + w_z
 
-        # Dinâmica Rotacional (Usando tau_real)q
-        dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q * r
-        dq = tau_real[1] / Iyy + ((Izz - Ixx) / Iyy) * p * r
-        dr = tau_real[2] / Izz + ((Ixx - Iyy) / Izz) * p * q
+        # Dinâmica Rotacional (Usando tau_real)
+        dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q_t * r_t
+        dq = tau_real[1] / Iyy + ((Izz - Ixx) / Iyy) * p_t * r_t
+        dr = tau_real[2] / Izz + ((Ixx - Iyy) / Izz) * p_t * q_t
 
-        dphi = p + q * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
-        dtheta = q * np.cos(phi) - r * np.sin(phi)
-        dpsi = q * np.sin(phi) / np.cos(theta) + r * np.cos(phi) / np.cos(theta)
+        dphi = (
+            p_t
+            + q_t * np.sin(phi_t) * np.tan(theta_t)
+            + r_t * np.cos(phi_t) * np.tan(theta_t)
+        )
+        dtheta = q_t * np.cos(phi_t) - r_t * np.sin(phi_t)
+        dpsi = q_t * np.sin(phi_t) / np.cos(theta_t) + r_t * np.cos(phi_t) / np.cos(
+            theta_t
+        )
 
         # Integração
         state[0] += state[3] * dt_sim
@@ -293,6 +541,9 @@ def simulate():
         history["phi"].append(state[6])
         history["theta"].append(state[7])
         history["psi"].append(state[8])
+        history["phi_est"].append(phi_est)
+        history["theta_est"].append(theta_est)
+        history["psi_est"].append(psi_est)
         history["wind_x"].append(w_x)
         history["wind_y"].append(w_y)
         history["wind_z"].append(w_z)
@@ -300,6 +551,15 @@ def simulate():
         history["rpm2"].append(rpms[1])
         history["rpm3"].append(rpms[2])
         history["rpm4"].append(rpms[3])
+        history["ax_meas"].append(accel_meas[0])
+        history["ay_meas"].append(accel_meas[1])
+        history["az_meas"].append(accel_meas[2])
+        history["gx_meas"].append(gyro_meas[0])
+        history["gy_meas"].append(gyro_meas[1])
+        history["gz_meas"].append(gyro_meas[2])
+        history["mx_meas"].append(mag_meas[0])
+        history["my_meas"].append(mag_meas[1])
+        history["mz_meas"].append(mag_meas[2])
 
     return history
 
@@ -307,7 +567,7 @@ def simulate():
 history = simulate()
 
 # ==========================================
-# 4. GRÁFICOS ESTÁTICOS
+# 4. GRÁFICOS — DESEMPENHO DE CONTROLE
 # ==========================================
 fig1 = plt.figure(figsize=(14, 14))
 
@@ -339,14 +599,14 @@ plt.legend(loc="upper right")
 plt.grid(True)
 
 plt.subplot(4, 1, 3)
-plt.plot(history["t"], np.degrees(history["phi"]), label="Roll ($\phi$)", color="g")
+plt.plot(history["t"], np.degrees(history["phi"]), label="Roll ($\\phi$)", color="g")
 plt.plot(
     history["t"], np.degrees(history["theta"]), label="Pitch ($\\theta$)", color="r"
 )
-plt.plot(history["t"], np.degrees(history["psi"]), label="Yaw ($\psi$)", color="b")
+plt.plot(history["t"], np.degrees(history["psi"]), label="Yaw ($\\psi$)", color="b")
 plt.axhline(0, color="black", linestyle="--", linewidth=1)
 plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
-plt.title("Reação de Atitude Comandada (Graus)")
+plt.title("Reação de Atitude Comandada (Graus) — Estado Real")
 plt.ylabel("Ângulo (graus)")
 plt.legend(loc="upper right")
 plt.grid(True)
@@ -369,6 +629,104 @@ plt.legend(loc="lower right")
 plt.grid(True)
 
 plt.tight_layout()
+
+
+# ==========================================
+# 4B. SENSORES BRUTOS (MPU6050 + QMC5883L)
+# ==========================================
+fig_sensors = plt.figure(figsize=(14, 12))
+
+plt.subplot(3, 1, 1)
+plt.plot(history["t"], history["ax_meas"], label="Acel X", color="r", alpha=0.7)
+plt.plot(history["t"], history["ay_meas"], label="Acel Y", color="g", alpha=0.7)
+plt.plot(history["t"], history["az_meas"], label="Acel Z", color="b", alpha=0.7)
+plt.axhline(g, color="black", linestyle="--", linewidth=1, label="g = 9.81 m/s²")
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("MPU6050 — Acelerômetro (força específica, com ruído + bias)")
+plt.ylabel("m/s²")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.subplot(3, 1, 2)
+plt.plot(
+    history["t"],
+    np.degrees(history["gx_meas"]),
+    label="Giro X (p)",
+    color="r",
+    alpha=0.7,
+)
+plt.plot(
+    history["t"],
+    np.degrees(history["gy_meas"]),
+    label="Giro Y (q)",
+    color="g",
+    alpha=0.7,
+)
+plt.plot(
+    history["t"],
+    np.degrees(history["gz_meas"]),
+    label="Giro Z (r)",
+    color="b",
+    alpha=0.7,
+)
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("MPU6050 — Giroscópio (com ruído + bias)")
+plt.ylabel("°/s")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.subplot(3, 1, 3)
+plt.plot(history["t"], history["mx_meas"], label="Mag X", color="r", alpha=0.7)
+plt.plot(history["t"], history["my_meas"], label="Mag Y", color="g", alpha=0.7)
+plt.plot(history["t"], history["mz_meas"], label="Mag Z", color="b", alpha=0.7)
+plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+plt.title("QMC5883L — Magnetômetro (normalizado, com ruído)")
+plt.xlabel("Tempo (s)")
+plt.ylabel("Campo (norm.)")
+plt.legend(loc="upper right")
+plt.grid(True)
+
+plt.tight_layout()
+
+
+# ==========================================
+# 4C. ESTIMATIVA MADGWICK × ESTADO REAL
+# ==========================================
+fig_est = plt.figure(figsize=(14, 10))
+
+ang_pairs = [
+    ("phi", "Roll ($\\phi$)"),
+    ("theta", "Pitch ($\\theta$)"),
+    ("psi", "Yaw ($\\psi$)"),
+]
+for i, (key, label) in enumerate(ang_pairs):
+    plt.subplot(3, 1, i + 1)
+    real = np.degrees(np.array(history[key]))
+    est = np.degrees(np.array(history[key + "_est"]))
+    plt.plot(history["t"], real, label=f"{label} Real", linewidth=2)
+    plt.plot(
+        history["t"],
+        est,
+        label=f"{label} Estimado (Madgwick)",
+        linewidth=1.2,
+        linestyle="--",
+    )
+    plt.plot(
+        history["t"],
+        est - real,
+        label="Erro (Est − Real)",
+        color="orange",
+        alpha=0.6,
+    )
+    plt.axvspan(2.0, 3.5, color="gray", alpha=0.2)
+    plt.title(f"{label}: Real vs Madgwick")
+    plt.ylabel("Graus")
+    plt.legend(loc="upper right")
+    plt.grid(True)
+
+plt.xlabel("Tempo (s)")
+plt.tight_layout()
+
 
 # ==========================================
 # 5. ANIMAÇÃO 3D
