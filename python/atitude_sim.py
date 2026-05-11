@@ -12,7 +12,7 @@ Izz = 29.80e-6
 Ir = 1.02e-7
 m = 0.0469  # 46.9g
 g = 9.80665
-dt_sim = 0.01  # Simulação base (100Hz)
+dt_sim = 0.001  # Simulação base (100Hz)
 dt_sdre = 0.02  # SDRE a 50Hz
 dt_pid = 0.05  # PID a 10Hz
 
@@ -50,7 +50,7 @@ M_inv = np.linalg.inv(M_mixer)
 
 # Matriz de Mistura REAIS (simulando desbalanceamento de até 5% nos motores)
 error_percent = 0.03
-np.random.seed(1)  # Para resultados reprodutíveis
+np.random.seed(2)  # Para resultados reprodutíveis
 b_coeffs_real = b_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
 d_coeffs_real = d_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
 
@@ -101,7 +101,7 @@ R_mat = np.eye(3)
 
 max_tau_roll = 2 * b_coeff * L_eff * MAX_OMEGA * MAX_OMEGA
 max_tau_pitch = 2 * b_coeff * L_eff * MAX_OMEGA * MAX_OMEGA
-max_tau_yaw = 4 * d_coeff * MAX_OMEGA * MAX_OMEGA
+max_tau_yaw = 2 * d_coeff * MAX_OMEGA * MAX_OMEGA
 
 R_mat = np.diag(
     [
@@ -130,7 +130,7 @@ MAG_WORLD = np.array([np.cos(MAG_INCLINATION), 0.0, -np.sin(MAG_INCLINATION)])
 MAG_WORLD /= np.linalg.norm(MAG_WORLD)
 
 # Ganho β do filtro Madgwick (compromisso giroscópio × accel/mag)
-MADGWICK_BETA = 0.04
+MADGWICK_BETA = 0.05
 
 
 def madgwick_marg_update(q, gx, gy, gz, ax, ay, az, mx, my, mz, beta, dt):

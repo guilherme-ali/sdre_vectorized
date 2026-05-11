@@ -129,7 +129,7 @@ float Q[STATE_SIZE * STATE_SIZE] = {
 // Maximos torques físicos (aproximados) do drone:
 const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
 const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
-const float max_tau_yaw = 4 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
+const float max_tau_yaw = 2 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
 
 // Regra de Bryson para R: R_ii = 1 / (max_torque_i)^2
 const float R_11 = 1.0f / (max_tau_roll  * max_tau_roll);
