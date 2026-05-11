@@ -103,12 +103,12 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Baseando-se em Regra de Bryson
 // usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
 // Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 60.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 60.0f * DEG_TO_RAD;  
+const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
+const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
 const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = 45.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 45.0f * DEG_TO_RAD; // rad/s
-const float r_max = 90.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+const float p_max = roll_max_rad * 10; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = pitch_max_rad * 10; // rad/s
+const float r_max = yaw_max_rad * 10; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -348,7 +348,7 @@ void setup()
     }
     
     // Acelerar a convergência do quaternion passando as leituras estáticas várias vezes (com gyro=0)
-    for (int i = 0; i < 2000; i++) {
+    for (int i = 0; i < 100000; i++) {
         if (USE_MAGNETOMETER) {
             filter.update(0.0f, 0.0f, 0.0f, ax, ay, az, mx, my, mz);
         } else {

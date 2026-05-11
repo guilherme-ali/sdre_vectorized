@@ -15,12 +15,12 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DE TELEMETRIA =====
 // Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
-const bool PRINT_TELEMETRY = false;
+const bool PRINT_TELEMETRY = true;
 // ==============================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -103,12 +103,12 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Baseando-se em Regra de Bryson
 // usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
 // Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 60.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 60.0f * DEG_TO_RAD;  
-const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = 45.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 45.0f * DEG_TO_RAD; // rad/s
-const float r_max = 90.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+const float roll_max_rad = 15.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
+const float pitch_max_rad = 15.0f * DEG_TO_RAD;  
+const float yaw_max_rad = 30.0f * DEG_TO_RAD;    
+const float p_max = roll_max_rad * 10; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = pitch_max_rad * 10; // rad/s
+const float r_max = yaw_max_rad * 10; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -126,10 +126,20 @@ float Q[STATE_SIZE * STATE_SIZE] = {
     0, 0, 0, 0, 0, Q_66
 };
 
+// Maximos torques físicos (aproximados) do drone:
+const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_yaw = 4 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
+
+// Regra de Bryson para R: R_ii = 1 / (max_torque_i)^2
+const float R_11 = 1.0f / (max_tau_roll  * max_tau_roll);
+const float R_22 = 1.0f / (max_tau_pitch * max_tau_pitch);
+const float R_33 = 1.0f / (max_tau_yaw   * max_tau_yaw);
+
 float R[CONTROL_SIZE * CONTROL_SIZE] = {
-    1, 0, 0,
-    0, 1, 0,
-    0, 0, 1,
+    R_11, 0, 0,
+    0, R_22, 0,
+    0, 0, R_33
 };
 
 // Controladores
@@ -338,7 +348,7 @@ void setup()
     }
     
     // Acelerar a convergência do quaternion passando as leituras estáticas várias vezes (com gyro=0)
-    for (int i = 0; i < 2000; i++) {
+    for (int i = 0; i < 100000; i++) {
         if (USE_MAGNETOMETER) {
             filter.update(0.0f, 0.0f, 0.0f, ax, ay, az, mx, my, mz);
         } else {
@@ -539,8 +549,9 @@ void loop(){
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
-    // Atualiza omega_r para a próxima iteração (Voos 2006):
-    // omega_r = -ω1 + ω2 - ω3 + ω4  (motores CW: 1,3 / CCW: 2,4)
+    // Atualiza omega_r para a próxima iteração (acoplamento giroscópico, Ir desprezível):
+    // Motores CW: 1 (FR) e 3 (RL) | Motores CCW: 2 (RR) e 4 (FL)
+    // Convenção sign_i = +1 para CCW, -1 para CW (Σ sign_i · ω_i):
     omega_r = -sqrtf(w1_sq) + sqrtf(w2_sq) - sqrtf(w3_sq) + sqrtf(w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
