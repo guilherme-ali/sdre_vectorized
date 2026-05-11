@@ -49,7 +49,7 @@ M_mixer = np.array(
 M_inv = np.linalg.inv(M_mixer)
 
 # Matriz de Mistura REAIS (simulando desbalanceamento de até 5% nos motores)
-error_percent = 0.05
+error_percent = 0.03
 np.random.seed(1)  # Para resultados reprodutíveis
 b_coeffs_real = b_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
 d_coeffs_real = d_coeff * np.random.uniform(1 - error_percent, 1 + error_percent, 4)
@@ -80,9 +80,9 @@ M_mixer_real = np.array(
 K_DRAG_TRANS = 0.01  # N·s/m
 
 # Matrizes de Peso do SDRE (Q e R)
-roll_max_rad = 15.0 * np.pi / 180.0
-pitch_max_rad = 15.0 * np.pi / 180.0
-yaw_max_rad = 30.0 * np.pi / 180.0
+roll_max_rad = 45.0 * np.pi / 180.0
+pitch_max_rad = 45.0 * np.pi / 180.0
+yaw_max_rad = 180.0 * np.pi / 180.0
 p_max = roll_max_rad * 10
 q_max = pitch_max_rad * 10
 r_max = yaw_max_rad * 10
@@ -452,9 +452,9 @@ def simulate():
 
         if 2.0 <= t <= 3.5:
             # Aumentei um pouco a rajada para forçar os motores a baterem no teto de 31k
-            w_x += np.random.normal(0.3, 0.1)
-            w_y += np.random.normal(-0.2, 0.1)
-            w_z += np.random.normal(-0.05, 0.05)
+            w_x += np.random.normal(0.3, 0.1) * 10
+            w_y += np.random.normal(-0.2, 0.1) * 10
+            w_z += np.random.normal(-0.05, 0.05) * 10
 
         # ====================================================
         # SENSORES + FILTRO MADGWICK (executa a cada passo, 100Hz)
