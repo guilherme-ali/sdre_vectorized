@@ -603,6 +603,7 @@ void loop(){
                 telemetry.dumpCSV(Serial);
             } else if (c == 'R' || c == 'r') {
                 telemetry.reset();
+                telemetry.saveToFile(); // persiste reset no flash — evita restaurar dados antigos no boot
                 Serial.println(">> Buffer de telemetria resetado.");
             }
         }
