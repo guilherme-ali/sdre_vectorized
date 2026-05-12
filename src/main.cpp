@@ -20,7 +20,7 @@ const bool DEBUG_MODE = false;
 
 // ===== FLAG DE TELEMETRIA =====
 // Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
-const bool PRINT_TELEMETRY = true;
+const bool PRINT_TELEMETRY = false;
 // ==============================
 
 // ===== FLAG DO MAGNETÔMETRO =====
@@ -43,6 +43,7 @@ const int CONTROLLER_TYPE = 0;
 #include "MotorControl.h" // Incluir controle de motores
 #include "WiFiComm.h" // Comunicação WiFi/UDP
 #include "led_control.h" // Controle de LEDs e bateria
+#include "Telemetry.h"   // Buffer circular de telemetria em RAM
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -103,12 +104,12 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Baseando-se em Regra de Bryson
 // usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
 // Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
-const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = roll_max_rad * 10; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = pitch_max_rad * 10; // rad/s
-const float r_max = yaw_max_rad * 10; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+const float roll_max_rad = 30.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
+const float pitch_max_rad = 30.0f * DEG_TO_RAD;  
+const float yaw_max_rad = 45.0f * DEG_TO_RAD;    
+const float p_max = 30.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = 30.0f * DEG_TO_RAD; // rad/s
+const float r_max = 60.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -184,6 +185,9 @@ LEDControl leds;
 // Instância da comunicação WiFi
 WiFiComm wifiComm("ESP-DRONE", "12345678", 2390);
 
+// Buffer de telemetria em RAM (CAPACITY=1000 amostras = ~20s @ 50Hz)
+Telemetry telemetry;
+
 // Variáveis de controle remoto
 bool remote_control_enabled = false;
 CommanderPacket remote_command;
@@ -244,7 +248,8 @@ void onClientDisconnected() {
     
     // Para todos os motores imediatamente
     motors.stopAllMotors();
-    
+    telemetry.saveToFile();
+
     // Zera comandos por segurança
     remote_command.roll = 0;
     remote_command.pitch = 0;
@@ -265,6 +270,20 @@ void setup()
 
     Serial.begin(115200);
     delay(1000);
+
+    // ===== Persistencia de telemetria em flash =====
+    // ESP32 reseta quando Serial Monitor abre, entao salvamos buffer em LittleFS
+    // ao desarmar e recarregamos no boot pra ficar disponivel apos reset.
+    if (LittleFS.begin(true)) {  // true = formata se montagem falhar
+        if (telemetry.loadFromFile()) {
+            Serial.printf(">> Telemetria anterior carregada: %u amostras\n",
+                          (unsigned)telemetry.size());
+        } else {
+            Serial.println(">> Nenhuma telemetria anterior em flash.");
+        }
+    } else {
+        Serial.println("!! Falha ao montar LittleFS - telemetria nao sera persistida.");
+    }
 
     // Inicializa o sistema de LEDs e bateria
     leds.begin();
@@ -361,7 +380,7 @@ void setup()
 
     // Inicializa o sistema de controle de motores
     motors.begin();
-    motors.setThrottleLimits(0, 100); // Permite uso total dos motores (0-100%)
+    motors.setThrottleLimits(0, 100); // Piso de 8% (idle em voo) - evita motor parar em transientes
     // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
     motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 31k RPM (medido)
     
@@ -470,6 +489,7 @@ void loop(){
 
         // Para motores imediatamente
         motors.stopAllMotors();
+        telemetry.saveToFile();
 
         // Zera comandos por seguranca
         remote_command.roll = 0;
@@ -563,6 +583,30 @@ void loop(){
         motors.stopAllMotors();
     }
     t_motor_set = micros() - t_checkpoint;
+
+    // ===== TELEMETRIA EM RAM (apenas quando armado) =====
+    // Custo: ~1 us (apenas escritas em RAM, sem printf nem I/O).
+    if (motors.isArmed()) {
+        telemetry.log(millis(),
+                      roll, pitch, yaw,
+                      p, q, r,
+                      u[0], u[1], u[2],
+                      w1_sq, w2_sq, w3_sq, w4_sq);
+    } else {
+        // Drone parado: poll comando de dump via Serial.
+        // 'D' ou 'd' -> imprime CSV de toda telemetria capturada.
+        // 'R' ou 'r' -> reseta buffer.
+        // So roda quando desarmado, nao afeta o loop de controle.
+        if (Serial.available()) {
+            char c = Serial.read();
+            if (c == 'D' || c == 'd') {
+                telemetry.dumpCSV(Serial);
+            } else if (c == 'R' || c == 'r') {
+                telemetry.reset();
+                Serial.println(">> Buffer de telemetria resetado.");
+            }
+        }
+    }
 
     // Tempo de processamento
     unsigned long processingTime = micros() - startTime;
