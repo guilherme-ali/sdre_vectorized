@@ -28,7 +28,7 @@ void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     // Configuração do MPU6050
     mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
     mpu.setGyroRange(MPU6050_RANGE_1000_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
     
     delay(100); // Aguarda estabilização
 }
