@@ -104,12 +104,12 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Baseando-se em Regra de Bryson
 // usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
 // Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 30.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 30.0f * DEG_TO_RAD;  
-const float yaw_max_rad = 45.0f * DEG_TO_RAD;    
-const float p_max = 30.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 30.0f * DEG_TO_RAD; // rad/s
-const float r_max = 60.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
+const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
+const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
+const float p_max = 90.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = 90.0f * DEG_TO_RAD; // rad/s
+const float r_max = 180.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -198,7 +198,8 @@ bool motors_armed_by_remote = false; // Indica se motores foram armados pelo con
 bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
 bool tilt_failsafe_latched = false; // Trava de segurança por inclinacao excessiva (so libera com reset)
 
-const float MAX_SAFE_TILT_DEG = 80.0f;
+// B6: failsafe a 60° (antes 80°). Evita zona singular 1/cos(pitch) onde Ad explode.
+const float MAX_SAFE_TILT_DEG = 60.0f;
 const float MAX_SAFE_TILT_RAD = MAX_SAFE_TILT_DEG * DEG_TO_RAD;
 
 // Callbacks para comunicação WiFi
@@ -352,7 +353,8 @@ void setup()
 
 
         pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
-        pidController.setOutputLimits(-10.0f, 10.0f);
+        // B3: clamp torque ao máximo físico (max_tau_roll ≈ 0.016 N·m); roll é o eixo mais apertado
+        pidController.setOutputLimits(-max_tau_roll, max_tau_roll);
         pidController.setSamplingTime(SAMPLING_TIME_S);
     }
 
@@ -380,7 +382,7 @@ void setup()
 
     // Inicializa o sistema de controle de motores
     motors.begin();
-    motors.setThrottleLimits(0, 100); // Piso de 8% (idle em voo) - evita motor parar em transientes
+    motors.setThrottleLimits(8, 100); // B5: piso 8% (idle em voo) - evita motor parar em transientes
     // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
     motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 31k RPM (medido)
     
@@ -479,7 +481,7 @@ void loop(){
     while (yaw > PI) yaw -= 2.0f * PI;
     while (yaw < -PI) yaw += 2.0f * PI;
 
-    // Failsafe: desliga e trava motores se inclinacao exceder 45 graus
+    // Failsafe: desliga e trava motores se inclinacao exceder MAX_SAFE_TILT_DEG (60°)
     if (!tilt_failsafe_latched &&
         (fabsf(roll) > MAX_SAFE_TILT_RAD || fabsf(pitch) > MAX_SAFE_TILT_RAD)) {
         tilt_failsafe_latched = true;
@@ -501,7 +503,7 @@ void loop(){
         leds.setSystemReady(false);
         leds.setUDPReceiving(false);
 
-        Serial.println("\n🚨 FAILSAFE: inclinacao acima de 45 graus detectada!");
+        Serial.println("\n🚨 FAILSAFE: inclinacao acima de 60 graus detectada!");
         Serial.printf("   Roll: %.2f deg | Pitch: %.2f deg\n", roll * RAD_TO_DEG, pitch * RAD_TO_DEG);
         Serial.println("   Motores desligados. Reinicie o drone para rearmar.");
     }
@@ -533,6 +535,13 @@ void loop(){
         phi_desired = remote_command.roll * DEG_TO_RAD;
         theta_desired = remote_command.pitch * DEG_TO_RAD;
         yaw_desired = remote_command.yaw * DEG_TO_RAD;
+
+        // B2: desnormaliza yaw_desired ao redor de yaw atual (erro em [-π,π]).
+        // Sem isso, SDRE faz x[2]-r[2] linear → gira pela rota longa em setpoints grandes.
+        float yaw_err = yaw_desired - yaw;
+        while (yaw_err > PI) yaw_err -= 2.0f * PI;
+        while (yaw_err < -PI) yaw_err += 2.0f * PI;
+        yaw_desired = yaw + yaw_err;
 
         thrust = (remote_command.thrust / 65000.0f) * MAX_THRUST * 4; // 4 motores
     } else {
@@ -693,7 +702,7 @@ void loop(){
             // Status de controle
             if (tilt_failsafe_latched) {
                 Serial.println("\n🚨 MODO: FAILSAFE TRAVADO");
-                Serial.println("   Motivo: roll/pitch acima de 45 graus");
+                Serial.println("   Motivo: roll/pitch acima de 60 graus");
                 Serial.println("   Acao: motores desligados ate reset total do drone");
             } else if (remote_control_enabled && wifiComm.isClientConnected()) {
                 Serial.println("\n🎮 MODO: CONTROLE REMOTO ATIVO");
@@ -836,9 +845,9 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     // Atualiza a matriz A contínua com as velocidades angulares atuais
     // As três primeiras linhas permanecem constantes
 
-    float alpha_1 = 0.5f;
-    float alpha_2 = 0.5f;
-    float alpha_3 = 0.5f;      
+    float alpha_1 = 1.0f;
+    float alpha_2 = 0.0f;
+    float alpha_3 = 0.0f;      
 
     float sin_roll = sin(roll);
     float cos_roll = cos(roll);
@@ -903,8 +912,11 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
 
     // Atualiza o controlador SDRE com a nova matriz de estados
     // (PID não usa matriz de estados, mas chamamos por compatibilidade)
+    // B1: Bd é recalculado a cada iteração (depende de A(x)); precisa propagar pro controller.
+    // Sem este setInputMatrix, SDRE usa Bd da inicialização (A=0) → modelo errado, K diverge.
     if (CONTROLLER_TYPE == 0) {
         sdreController.setStateMatrix(Ad);
+        sdreController.setInputMatrix(Bd);
     }
 }
 

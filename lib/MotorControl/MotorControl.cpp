@@ -251,8 +251,10 @@ float MotorControl::constrainThrottle(float throttle)
 
 int MotorControl::throttleToPWM(float throttle)
 {
-    // Mapeia throttle (0-100%) para PWM (0-1023)
-    return map(throttle * 100, 0, 10000, 0, PWM_MAX_VALUE);
+    // Duty cycle direto (brushed + MOSFET @ 25 kHz): throttle% → 0..PWM_MAX_VALUE
+    float duty = (throttle / 100.0f) * PWM_MAX_VALUE;
+    duty = constrain(duty, 0.0f, (float)PWM_MAX_VALUE);
+    return (int)lroundf(duty);
 }
 
 float MotorControl::omegaSqToThrottle(float omega_sq)
