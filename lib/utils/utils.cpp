@@ -276,7 +276,13 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
     float u3 = u_torques[1];     // Torque de Arfagem (Pitch) [N·m]
     float u4 = u_torques[2];     // Torque de Guinada (Yaw) [N·m]
 
-    // Matriz de alocação de controle (configuração X-quad):
+    // Relação direta (u = T*ω²):
+    // [u1]   [  b     b     b     b ] [ω1²]
+    // [u2] = [-bL   -bL    bL    bL ] [ω2²]
+    // [u3]   [  bL  -bL   -bL    bL ] [ω3²]
+    // [u4]   [ -d     d    -d     d ] [ω4²]
+    //
+    // Matriz de alocação de controle inversa (ω² = T^(-1)*u) (configuração X-quad):
     // Sinais da coluna de yaw invertidos para casar com o sentido fisico
     // (motores 2 e 4 CCW devem acelerar para u4 > 0).
     // [ω1²]   [1/(4b)  -1/(2bL)   1/(2bL)  -1/(4d)] [u1]
