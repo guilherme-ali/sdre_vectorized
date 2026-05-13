@@ -257,21 +257,25 @@ int MotorControl::throttleToPWM(float throttle)
 
 float MotorControl::omegaSqToThrottle(float omega_sq)
 {
-    // Garante que omega_sq não seja negativo
+    // Fit empírico do CSV teste_motor.csv (motor real, ESC + hélice).
+    // Curva ESC+motor é côncava (satura) → não-linear.
+    // Ajuste quadrático em omega: PWM% = c2*w^2 + c1*w + c0
+    // Ancorado em (omega, PWM%) = (416, 4), (1920, 30), (3255, 100).
+    // Erro residual < 4% nos pontos intermediários (10/50/70%).
+    static const float C2 = 1.236e-5f;
+    static const float C1 = -1.159e-2f;
+    static const float C0 = 6.68f;
+
     if (omega_sq < 0) {
         omega_sq = 0;
     }
-    
-    // Limita ao máximo configurado
     if (omega_sq > max_omega_sq) {
         omega_sq = max_omega_sq;
     }
-    
-    // Mapeia omega² para throttle (0-100%) usando float
-    // Relação linear: throttle = (omega_sq / max_omega_sq) * 100
-    // Não usa sqrt para evitar não-linearidade e simplificar
-    float throttle = (omega_sq / max_omega_sq) * (max_throttle - min_throttle) + min_throttle;
-    
+
+    float omega = sqrtf(omega_sq);
+    float throttle = C2 * omega_sq + C1 * omega + C0;
+
     return constrainThrottle(throttle);
 }
 
