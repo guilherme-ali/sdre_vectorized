@@ -15,21 +15,42 @@ Izz = 29.80e-6  # Momento de inércia em z
 Ir = 1.02e-7  # Momento de inércia do rotor
 Omega_r = 0.0  # Velocidade angular do rotor
 
+u1_hover = 0.0469 * 9.80665  # m * g
+b_coef = 1.77e-8
+d_coef = 0.05 * b_coef
+L_arm = 0.060 * np.sin(np.pi / 4)
+
+# LIMITES DE RPM (Saturação)
+MAX_RPM = 31086.0
+MAX_OMEGA = MAX_RPM * (2.0 * np.pi) / 60.0
+MAX_OMEGA_SQ = MAX_OMEGA**2
+
 # Condições iniciais [p, q, r, phi, theta, psi]
 x0 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 
 # Matrizes de ponderação para a função de custo
 Q = np.diag(
     [
-        1.0 / ((45.0 * 10 * np.pi / 180.0) ** 2),  # p
-        1.0 / ((45.0 * 10 * np.pi / 180.0) ** 2),  # q
-        1.0 / ((90.0 * 10 * np.pi / 180.0) ** 2),  # r
-        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # phi
-        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # theta
-        1.0 / ((90.0 * np.pi / 180.0) ** 2),  # psi
+        1.0 / ((10.0 * 10 * np.pi / 180.0) ** 2),  # p
+        1.0 / ((10.0 * 10 * np.pi / 180.0) ** 2),  # q
+        1.0 / ((20.0 * 10 * np.pi / 180.0) ** 2),  # r
+        1.0 / ((10.0 * np.pi / 180.0) ** 2),  # phi
+        1.0 / ((10.0 * np.pi / 180.0) ** 2),  # theta
+        1.0 / ((20.0 * np.pi / 180.0) ** 2),  # psi
     ]
 )
-R = np.eye(3) * 1.0  # 3x3
+max_tau_roll = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA
+max_tau_pitch = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA
+max_tau_yaw = 2 * d_coef * MAX_OMEGA * MAX_OMEGA
+
+R = np.diag(
+    [
+        1.0 / (max_tau_roll**2),
+        1.0 / (max_tau_pitch**2),
+        1.0 / (max_tau_yaw**2),
+    ]
+)
+
 
 # Matriz de entrada do sistema B (6x3)
 B = np.array(
@@ -52,9 +73,9 @@ t_eval = np.linspace(t_span[0], t_span[1], num_steps)
 # Valores dos parâmetros para testar
 amostras = 10
 extremidades = 1.0
-param1_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha1
-param2_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha2
-param3_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha3
+param1_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha1
+param2_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha2
+param3_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha3
 
 # --- Geração do ruído para simular vento ---
 # Configuração do ruído
@@ -201,12 +222,6 @@ with tqdm(param_combinations, desc="Simulações", unit="sim", position=0) as pb
         states[6, 0] = 0.0
 
         Omega_r_k = 0.0  # Velocidade angular residual inicial
-
-        # Parâmetros físicos do motor
-        u1_hover = 0.040 * 9.80665  # m * g
-        b_coef = 1.11e-8
-        d_coef = 0.05 * b_coef
-        L_arm = 0.060
 
         for k in range(1, num_steps):
             x = states[:6, k - 1]
