@@ -107,9 +107,9 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
 const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
 const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = 90.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 90.0f * DEG_TO_RAD; // rad/s
-const float r_max = 180.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+const float p_max = 30.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
+const float q_max = 30.0f * DEG_TO_RAD; // rad/s
+const float r_max = 60.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
