@@ -229,28 +229,11 @@ bool AutoLQR::computeGainMatrixSDA()
     matrixCopy(Q, Hk, stateSize * stateSize);
 
     // ========================================================================
-    // ESCALONAMENTO INICIAL (melhora convergência inicial)
+    // ESCALONAMENTO INICIAL (removido para DARE pois altera a solução)
     // ========================================================================
-    // Calcula escalonamento ótimo baseado nas normas das matrizes
-    float norm_G = 0.0f, norm_H = 0.0f;
-    for (int i = 0; i < stateSize * stateSize; i++) {
-        norm_G += Gk[i] * Gk[i];
-        norm_H += Hk[i] * Hk[i];
-    }
-    norm_G = sqrtf(norm_G);
-    norm_H = sqrtf(norm_H);
-    
-    // Escalonamento beta para equilibrar Gk e Hk
-    float beta_scale = 1.0f;
-    if (norm_H > 1e-10f && norm_G > 1e-10f) {
-        beta_scale = sqrtf(norm_H / norm_G);
-        beta_scale = fminf(fmaxf(beta_scale, 0.1f), 10.0f);  // Limita entre 0.1 e 10
-        
-        // Aplica escalonamento: Gk *= beta², mantém Hk
-        for (int i = 0; i < stateSize * stateSize; i++) {
-            Gk[i] *= (beta_scale * beta_scale);
-        }
-    }
+    // O escalonamento beta é aplicável em CARE (Equação de Riccati Contínua),
+    // mas em DARE (Discreta) ele modifica a resposta final do horizonte infinito.
+    // Portanto, nenhuma alteração em Gk (ou Hk) deve ser feita.
 
     // ========================================================================
     // LOOP SDA
