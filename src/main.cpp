@@ -58,7 +58,7 @@ const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.04690f;     // 46.9g
 const float L_ARM = 0.060f * 0.70710678f; // 60mm * sin(45°) - braço efetivo para X-quad
-const float SAMPLING_TIME_S = 0.02f; // 20 ms
+const float SAMPLING_TIME_S = 0.013f; // 13 ms
 const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 float omega_r = 0;
 
@@ -113,8 +113,8 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 // Q angular muito alto vs Q rate; envelope maior baixa Q_ang e melhora razao P/D.
 // p_max=200°/s: autoridade de rate alta → Q_rate sobe → mais amortecimento (D).
 // Qii = 1/(max_estado_i)^2
-const float roll_max_rad = 20.0f * DEG_TO_RAD;
-const float pitch_max_rad = 20.0f * DEG_TO_RAD;
+const float roll_max_rad = 45.0f * DEG_TO_RAD;
+const float pitch_max_rad = 45.0f * DEG_TO_RAD;
 const float yaw_max_rad = 90.0f * DEG_TO_RAD;
 const float p_max = 200.0f * DEG_TO_RAD; // rad/s — sobe peso da taxa (mais "D")
 const float q_max = 200.0f * DEG_TO_RAD; // rad/s
@@ -137,8 +137,8 @@ float Q[STATE_SIZE * STATE_SIZE] = {
 };
 
 // Maximos torques físicos (aproximados) do drone:
-const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
-const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA / 2; // ~0.016 N·m
+const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA / 2 ; // ~0.016 N·m
 const float max_tau_yaw = 2 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
 
 // Regra de Bryson para R: R_ii = 1 / (max_torque_i)^2

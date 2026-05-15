@@ -30,7 +30,7 @@ void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     mpu.setGyroRange(MPU6050_RANGE_1000_DEG);
     // DLPF 44 Hz: compromisso entre anti-aliasing (Nyquist=25 Hz a 50 Hz loop)
     // e atraso de fase (4.9 ms). 21 Hz adicionaria 8.5 ms (42% do periodo).
-    mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
+    mpu.setFilterBandwidth(MPU6050_BAND_260_HZ);
     mpu.setSampleRateDivisor(0);
         
     delay(100); // Aguarda estabilização
