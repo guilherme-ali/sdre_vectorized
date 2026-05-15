@@ -262,11 +262,16 @@ float MotorControl::omegaSqToThrottle(float omega_sq)
     // Fit empírico do CSV teste_motor.csv (motor real, ESC + hélice).
     // Curva ESC+motor é côncava (satura) → não-linear.
     // Ajuste quadrático em omega: PWM% = c2*w^2 + c1*w + c0
-    // Ancorado em (omega, PWM%) = (416, 4), (1920, 30), (3255, 100).
-    // Erro residual < 4% nos pontos intermediários (10/50/70%).
-    static const float C2 = 1.236e-5f;
-    static const float C1 = -1.159e-2f;
-    static const float C0 = 6.68f;
+    
+    //helice 45mm
+    //static const float C2 = 1.236e-5f;
+    //static const float C1 = -1.159e-2f;
+    //static const float C0 = 6.68f;
+
+    //helice 55mm
+    static const float C2 = 1.31e-5f;
+    static const float C1 = -2.38e-3f;
+    static const float C0 = 4.37f;
 
     if (omega_sq < 0) {
         omega_sq = 0;

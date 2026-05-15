@@ -64,11 +64,16 @@ float omega_r = 0;
 
 // Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
 
-const float MOTOR_B_COEFF = 1.77e-8f;   // Coeficiente de empuxo MEDIDO (regressão: F = 1.11E-08*ω² - 5.09E-04) [N/(rad/s)²]
+// helice 45mm
+//const float MOTOR_B_COEFF = 1.77e-8f;   // Coeficiente de empuxo MEDIDO [N/(rad/s)²]
+//const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
+
+// helice 55mm
+const float MOTOR_B_COEFF = 2.94e-8f;   // Coeficiente de empuxo MEDIDO [N/(rad/s)²]
+const float MAX_RPM = 26423.0f; // RPM medido a 100% duty cycle
+
 const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²] (estimado)
 
-
-const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
 const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // ~3255.3 rad/s
 const float MAX_THRUST = MOTOR_B_COEFF * MAX_OMEGA * MAX_OMEGA; // Empuxo máximo medido a 100% duty cycle (N)
 
