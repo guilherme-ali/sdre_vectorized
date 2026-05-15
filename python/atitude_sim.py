@@ -12,18 +12,18 @@ Izz = 29.80e-6
 Ir = 1.02e-7
 m = 0.0469  # 46.9g
 g = 9.80665
-dt_sim = 0.001  # Simulação base (100Hz)
+dt_sim = 0.02  # Simulação base (100Hz)
 dt_sdre = 0.02  # SDRE a 50Hz
 dt_pid = 0.05  # PID a 10Hz
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
-b_coeff = 1.77e-8  # Coeficiente de Empuxo
+b_coeff = 2.94e-8  # Coeficiente de Empuxo
 d_coeff = 0.05 * b_coeff  # Coeficiente de Arrasto
 L_arm = 0.060  # 60mm
 L_eff = L_arm * np.sin(np.pi / 4)  # Braço efetivo para config em 'X'
 
 # LIMITES DE RPM (Saturação)
-MAX_RPM = 31086.0
+MAX_RPM = 26423.0
 MAX_OMEGA = MAX_RPM * (2.0 * np.pi) / 60.0
 MAX_OMEGA_SQ = MAX_OMEGA**2
 
@@ -80,12 +80,12 @@ M_mixer_real = np.array(
 K_DRAG_TRANS = 0.01  # N·s/m
 
 # Matrizes de Peso do SDRE (Q e R)
-roll_max_rad = 45.0 * np.pi / 180.0
-pitch_max_rad = 45.0 * np.pi / 180.0
-yaw_max_rad = 180.0 * np.pi / 180.0
-p_max = roll_max_rad * 10
-q_max = pitch_max_rad * 10
-r_max = yaw_max_rad * 10
+roll_max_rad = 10.0 * np.pi / 180.0
+pitch_max_rad = 10.0 * np.pi / 180.0
+yaw_max_rad = 30.0 * np.pi / 180.0
+p_max = 90.0 * np.pi / 180.0
+q_max = 90.0 * np.pi / 180.0
+r_max = 180.0 * np.pi / 180.0
 
 Q = np.diag(
     [
@@ -130,7 +130,7 @@ MAG_WORLD = np.array([np.cos(MAG_INCLINATION), 0.0, -np.sin(MAG_INCLINATION)])
 MAG_WORLD /= np.linalg.norm(MAG_WORLD)
 
 # Ganho β do filtro Madgwick (compromisso giroscópio × accel/mag)
-MADGWICK_BETA = 0.05
+MADGWICK_BETA = 0.03
 
 
 def madgwick_marg_update(q, gx, gy, gz, ax, ay, az, mx, my, mz, beta, dt):
@@ -381,7 +381,7 @@ def simulate():
 
     u_max = b_coeff * MAX_OMEGA_SQ * 4
     erro_max = 0.5
-    kp_z = (u_max - g * m) / (erro_max * m) * 0.8
+    kp_z = (u_max - g * m) / (erro_max * m)
 
     # kd >= 2*sqrt(kp) para garantir amortecimento crítico ou superamortecido
     kd_z = 2 * np.sqrt(kp_z)
@@ -392,7 +392,7 @@ def simulate():
 
     pid_vx = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
     pid_vy = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
-    pid_z = PIDController(kp=0, ki=0, kd=0, dt=dt_pid, limit=15.0)
+    # pid_z = PIDController(kp=0, ki=0, kd=0, dt=dt_pid, limit=15.0)
 
     history = {
         "t": [],
@@ -450,11 +450,12 @@ def simulate():
         w_y = np.random.normal(0.0, 0.2)
         w_z = np.random.normal(0.0, 0.1)
 
-        if 2.0 <= t <= 3.5:
+        flag_rajada = False
+        if (2.0 <= t <= 3.5) and flag_rajada:
             # Aumentei um pouco a rajada para forçar os motores a baterem no teto de 31k
-            w_x += np.random.normal(0.3, 0.1) * 10
-            w_y += np.random.normal(-0.2, 0.1) * 10
-            w_z += np.random.normal(-0.05, 0.05) * 10
+            w_x += np.random.normal(0.3, 0.1)
+            w_y += np.random.normal(-0.2, 0.1)
+            w_z += np.random.normal(-0.05, 0.05)
 
         # ====================================================
         # SENSORES + FILTRO MADGWICK (executa a cada passo, 100Hz)
@@ -490,6 +491,12 @@ def simulate():
 
             theta_ref = np.arctan2(ux, uz + g)
             phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
+
+            # Injeção de referência de Roll (10s a 11s: 10°, 15s a 16s: -10°)
+            if 5.0 <= t <= 6.0:
+                phi_ref = 10.0 * np.pi / 180.0
+            elif 8.0 <= t <= 9.0:
+                phi_ref = -10.0 * np.pi / 180.0
 
             T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
 
