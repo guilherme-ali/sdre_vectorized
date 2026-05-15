@@ -87,6 +87,8 @@ float evx = 0, evy = 0, evz = 0;
 
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
+float Qd[STATE_SIZE * STATE_SIZE];
+float Rd[CONTROL_SIZE * CONTROL_SIZE];
 
 // Matrizes do sistema
 float A[STATE_SIZE * STATE_SIZE] = {
@@ -106,15 +108,17 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 1/Iyy, 0,
     0, 0, 1/Izz
 };
-// Baseando-se em Regra de Bryson
-// usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
-// Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
-const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = 30.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 30.0f * DEG_TO_RAD; // rad/s
-const float r_max = 60.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+// Regra de Bryson com envelope realista de voo (nao limites mecanicos).
+// roll/pitch_max=20°: cruise/turn moderada. Sintoma "10° causa oscilacao" indica
+// Q angular muito alto vs Q rate; envelope maior baixa Q_ang e melhora razao P/D.
+// p_max=200°/s: autoridade de rate alta → Q_rate sobe → mais amortecimento (D).
+// Qii = 1/(max_estado_i)^2
+const float roll_max_rad = 20.0f * DEG_TO_RAD;
+const float pitch_max_rad = 20.0f * DEG_TO_RAD;
+const float yaw_max_rad = 90.0f * DEG_TO_RAD;
+const float p_max = 200.0f * DEG_TO_RAD; // rad/s — sobe peso da taxa (mais "D")
+const float q_max = 200.0f * DEG_TO_RAD; // rad/s
+const float r_max = 200.0f * DEG_TO_RAD; // rad/s
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -340,14 +344,13 @@ void setup()
         }
     }
 
-    // Inicializa o controlador baseado no tipo selecionado
+    // Inicializa o controlador baseado no tipo selecionado.
+    // updateSystemMatrix ja discretiza A,B,Q,R e propaga para o controller.
     updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    
+
     if (CONTROLLER_TYPE == 0) {
         // SDRE Controller
         Serial.println("🎯 Controlador: SDRE (State-Dependent Riccati Equation)");
-        sdreController.setInputMatrix(Bd);
-        sdreController.setCostMatrices(Q, R);
     } else {
         // PID Controller
         Serial.println("🎯 Controlador: PID (Proportional-Integral-Derivative)");
@@ -387,7 +390,7 @@ void setup()
 
     // Inicializa o sistema de controle de motores
     motors.begin();
-    motors.setThrottleLimits(8, 100); // B5: piso 8% (idle em voo) - evita motor parar em transientes
+    motors.setThrottleLimits(0, 100); // Sem piso: motor para de vez (resolve clamp assimetrico no diferencial)
     // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
     motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 31k RPM (medido)
     
@@ -915,13 +918,46 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
         }
     }
 
-    // Atualiza o controlador SDRE com a nova matriz de estados
-    // (PID não usa matriz de estados, mas chamamos por compatibilidade)
-    // B1: Bd é recalculado a cada iteração (depende de A(x)); precisa propagar pro controller.
-    // Sem este setInputMatrix, SDRE usa Bd da inicialização (A=0) → modelo errado, K diverge.
+    // ====================================================================
+    // Discretizacao das matrizes de custo Q e R (ZOH, Taylor).
+    // J_c = integral(x'Qx + u'Ru)dt -> J_d = soma(x_k' Q_d x_k + u_k' R_d u_k).
+    //   Q_d = integral_0^dt(Phi'(tau) Q Phi(tau) dtau)
+    //       ≈ Q*dt + (A'Q + Q A)*dt^2/2                            (2a ordem)
+    //   R_d = R*dt + integral_0^dt(Gamma'(tau) Q Gamma(tau) dtau)
+    //       ≈ R*dt + (B' Q B)*dt^3/3                                (3a ordem)
+    //   N_d (termo cruzado) ignorado: SDA atual nao usa cross-term.
+    // ====================================================================
+    float A_T[STATE_SIZE * STATE_SIZE] = {0};
+    float AT_Q[STATE_SIZE * STATE_SIZE] = {0};
+    float QA_mat[STATE_SIZE * STATE_SIZE] = {0};
+    MatrixOperations::transposeMatrix(A, A_T, STATE_SIZE, STATE_SIZE);
+    MatrixOperations::matrixMultiply(A_T, Q, AT_Q, STATE_SIZE, STATE_SIZE, STATE_SIZE);
+    MatrixOperations::matrixMultiply(Q, A, QA_mat, STATE_SIZE, STATE_SIZE, STATE_SIZE);
+
+    for (int i = 0; i < STATE_SIZE * STATE_SIZE; i++) {
+        Qd[i] = Q[i] * dt + (AT_Q[i] + QA_mat[i]) * dt2_over_2;
+    }
+
+    // Termo de 3a ordem em R_d: (B' Q B) * dt^3 / 3
+    float B_T[CONTROL_SIZE * STATE_SIZE] = {0};
+    float BT_Q[CONTROL_SIZE * STATE_SIZE] = {0};
+    float BT_Q_B[CONTROL_SIZE * CONTROL_SIZE] = {0};
+    MatrixOperations::transposeMatrix(B, B_T, STATE_SIZE, CONTROL_SIZE);
+    MatrixOperations::matrixMultiply(B_T, Q, BT_Q, CONTROL_SIZE, STATE_SIZE, STATE_SIZE);
+    MatrixOperations::matrixMultiply(BT_Q, B, BT_Q_B, CONTROL_SIZE, STATE_SIZE, CONTROL_SIZE);
+
+    const float dt3_over_3 = dt * dt * dt / 3.0f;
+    for (int i = 0; i < CONTROL_SIZE * CONTROL_SIZE; i++) {
+        Rd[i] = R[i] * dt + BT_Q_B[i] * dt3_over_3;
+    }
+
+    // Atualiza o controlador SDRE com matrizes discretizadas.
+    // (PID não usa matrizes do modelo, então só roda para SDRE.)
+    // Bd e Qd dependem de A(x): recalculados a cada iter; propagar para o controller.
     if (CONTROLLER_TYPE == 0) {
         sdreController.setStateMatrix(Ad);
         sdreController.setInputMatrix(Bd);
+        sdreController.setCostMatrices(Qd, Rd);
     }
 }
 

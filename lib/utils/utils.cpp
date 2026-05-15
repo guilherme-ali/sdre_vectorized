@@ -14,22 +14,24 @@ void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     // Inicializa I2C com os pinos corretos para ESP32-S2
     Wire.begin(11, 10); // SDA = GPIO11, SCL = GPIO10
 
-    Wire.setClock(1000000); // Fast Mode (padrão é 100kHz)
-    
+    Wire.setClock(400000); // 400 kHz - max do MPU6050 segundo datasheet (1 MHz violava spec)
+
     if (!mpu.begin(0x68, &Wire)) {
         Serial.println("Falha ao inicializar MPU6050!");
         while (1) {
             delay(10);
         }
     }
-    
+
     Serial.println("MPU6050 inicializado com sucesso!");
-    
+
     // Configuração do MPU6050
     mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
     mpu.setGyroRange(MPU6050_RANGE_1000_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_260_HZ);
-    mpu.setSampleRateDivisor(0); 
+    // DLPF 44 Hz: compromisso entre anti-aliasing (Nyquist=25 Hz a 50 Hz loop)
+    // e atraso de fase (4.9 ms). 21 Hz adicionaria 8.5 ms (42% do periodo).
+    mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
+    mpu.setSampleRateDivisor(0);
         
     delay(100); // Aguarda estabilização
 }
