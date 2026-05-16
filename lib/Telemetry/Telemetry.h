@@ -14,7 +14,7 @@
  * (ESP32 reseta quando Serial Monitor abre - sem isso o buffer some).
  *
  * Tamanho: CAPACITY * sizeof(Sample) bytes.
- * Default: 1000 amostras x 44 bytes = ~44 KB em RAM, mesmo em flash.
+ * Default: 1000 amostras x 68 bytes = ~68 KB em RAM.
  *
  * Custo por log(): apenas escritas em RAM (~1 us). Zero printf, zero I/O.
  * Custo de saveToFile(): ~100-300 ms - so chamado apos pouso (motor parado).
@@ -23,10 +23,11 @@ class Telemetry {
 public:
     struct Sample {
         uint32_t t_ms;
-        float roll, pitch, yaw;     // rad
-        float p, q, r;              // rad/s (taxas no corpo)
-        float u0, u1, u2;           // torques SDRE [N·m]: roll, pitch, yaw
-        float w1_sq, w2_sq, w3_sq, w4_sq;  // rad^2/s^2
+        float roll, pitch, yaw;           // rad (medido)
+        float roll_ref, pitch_ref, yaw_ref; // rad (referencia)
+        float p, q, r;                    // rad/s (taxas no corpo)
+        float u0, u1, u2;                 // torques SDRE [N·m]: roll, pitch, yaw
+        float w1_sq, w2_sq, w3_sq, w4_sq; // rad^2/s^2
     };
 
     static constexpr size_t CAPACITY = 1000;
@@ -35,12 +36,14 @@ public:
 
     inline void log(uint32_t t_ms,
                     float roll, float pitch, float yaw,
+                    float roll_ref, float pitch_ref, float yaw_ref,
                     float p, float q, float r,
                     float u0, float u1, float u2,
                     float w1_sq, float w2_sq, float w3_sq, float w4_sq) {
         Sample &s = buf[head];
         s.t_ms = t_ms;
         s.roll = roll;  s.pitch = pitch;  s.yaw = yaw;
+        s.roll_ref = roll_ref; s.pitch_ref = pitch_ref; s.yaw_ref = yaw_ref;
         s.p = p;        s.q = q;          s.r = r;
         s.u0 = u0;      s.u1 = u1;        s.u2 = u2;
         s.w1_sq = w1_sq; s.w2_sq = w2_sq; s.w3_sq = w3_sq; s.w4_sq = w4_sq;
@@ -63,7 +66,7 @@ public:
     bool saveToFile(const char* path = "/telem.bin") {
         File f = LittleFS.open(path, "w");
         if (!f) return false;
-        uint32_t magic = 0x54454C4E; // "TELN" - v2 struct (added u0,u1,u2)
+        uint32_t magic = 0x54454C52; // "TELR" - v3 struct (added refs)
         f.write((uint8_t*)&magic, sizeof(magic));
         uint32_t cap = CAPACITY;
         f.write((uint8_t*)&cap, sizeof(cap));
@@ -87,7 +90,7 @@ public:
         uint32_t magic = 0, cap = 0, h = 0, c = 0;
         f.read((uint8_t*)&magic, sizeof(magic));
         f.read((uint8_t*)&cap, sizeof(cap));
-        if (magic != 0x54454C4E || cap != CAPACITY) {
+        if (magic != 0x54454C52 || cap != CAPACITY) {
             f.close();
             return false;
         }
@@ -104,15 +107,16 @@ public:
         out.println();
         out.println("=== TELEMETRY DUMP START ===");
         out.print("Samples: "); out.println((unsigned long)count);
-        out.println("t_ms,roll_deg,pitch_deg,yaw_deg,p_dps,q_dps,r_dps,u_roll,u_pitch,u_yaw,w1_sq,w2_sq,w3_sq,w4_sq");
+        out.println("t_ms,roll_deg,pitch_deg,yaw_deg,roll_ref,pitch_ref,yaw_ref,p_dps,q_dps,r_dps,u_roll,u_pitch,u_yaw,w1_sq,w2_sq,w3_sq,w4_sq");
 
         const float RAD2DEG = 57.29578f;
         size_t start = (count < CAPACITY) ? 0 : head;
         for (size_t i = 0; i < count; i++) {
             const Sample &s = buf[(start + i) % CAPACITY];
-            out.printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f\n",
+            out.printf("%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f\n",
                        (unsigned long)s.t_ms,
                        s.roll * RAD2DEG, s.pitch * RAD2DEG, s.yaw * RAD2DEG,
+                       s.roll_ref * RAD2DEG, s.pitch_ref * RAD2DEG, s.yaw_ref * RAD2DEG,
                        s.p * RAD2DEG, s.q * RAD2DEG, s.r * RAD2DEG,
                        s.u0, s.u1, s.u2,
                        s.w1_sq, s.w2_sq, s.w3_sq, s.w4_sq);

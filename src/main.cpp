@@ -730,15 +730,17 @@ void loop(){
     }
     t_motor_set = micros() - t_checkpoint;
 
-    // ===== TELEMETRIA EM RAM (apenas quando armado) =====
+    // ===== TELEMETRY EM RAM (apenas quando armado) =====
     // Custo: ~1 us (apenas escritas em RAM, sem printf nem I/O).
     if (motors.isArmed()) {
         telemetry.log(millis(),
                       roll, pitch, yaw,
+                      phi_desired, theta_desired, yaw_desired,
                       p, q, r,
                       u[0], u[1], u[2],
                       w1_sq, w2_sq, w3_sq, w4_sq);
     } else {
+
         // Drone parado: poll comando de dump via Serial.
         // 'D' ou 'd' -> imprime CSV de toda telemetria capturada.
         // 'R' ou 'r' -> reseta buffer.

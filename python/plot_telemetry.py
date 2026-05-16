@@ -62,6 +62,7 @@ SANITY = {
 
 COLS = [
     "t_ms", "roll_deg", "pitch_deg", "yaw_deg",
+    "roll_ref", "pitch_ref", "yaw_ref",
     "p_dps", "q_dps", "r_dps",
     "u_roll", "u_pitch", "u_yaw",
     "w1_sq", "w2_sq", "w3_sq", "w4_sq",
@@ -95,7 +96,7 @@ def _parse_block(lines: list[str]) -> pd.DataFrame | None:
         if not line or not line[0].isdigit() and not line[0] == "-":
             continue
         parts = line.split(",")
-        if len(parts) != 14:
+        if len(parts) != 17:
             continue
         try:
             row = [float(p) for p in parts]
@@ -190,15 +191,20 @@ def fig_attitude(df: pd.DataFrame, title_prefix: str) -> plt.Figure:
 
     # Atitude
     ax = axes[0]
-    hs = []
     for col, label, c in [("roll_deg","roll","roll"), ("pitch_deg","pitch","pitch"), ("yaw_deg","yaw","yaw")]:
-        h, = ax.plot(t, df[col], color=COLORS[c], lw=1.2, label=label)
-        hs.append(h)
+        # Medido (linha cheia)
+        ax.plot(t, df[col], color=COLORS[c], lw=1.2, label=label, alpha=0.9)
+        
+        # Referência (linha tracejada)
+        ref_col = col.replace("_deg", "_ref")
+        if ref_col in df.columns:
+            ax.plot(t, df[ref_col], color=COLORS[c], lw=1.0, ls="--", alpha=0.5, label=f"{label}_ref")
+
     _shade_flight(ax, df)
     ax.axhline(0, color="k", lw=0.5, ls="--")
     ax.set_ylabel("Ângulo (°)")
-    ax.legend(fontsize=8, loc="upper right")
-    ax.set_title("Atitude (Euler)", fontsize=9)
+    ax.legend(fontsize=8, loc="upper right", ncol=2)
+    ax.set_title("Atitude (Euler) — Linha cheia: medido, Tracejada: referência", fontsize=9)
 
     # Taxas
     ax = axes[1]
