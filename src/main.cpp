@@ -15,7 +15,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = true;
+const bool DEBUG_MODE = false;
 // ==========================
 
 // ===== FLAG DE TELEMETRIA =====
@@ -25,7 +25,7 @@ const bool PRINT_TELEMETRY = false;
 
 // ===== FLAG DO MAGNETÔMETRO =====
 // Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
-const bool USE_MAGNETOMETER = true;
+const bool USE_MAGNETOMETER = false;
 // =================================  
 
 // ===== TIPO DE CONTROLADOR =====
@@ -137,8 +137,8 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 const float roll_max_rad = 45.0f * DEG_TO_RAD;
 const float pitch_max_rad = 45.0f * DEG_TO_RAD;
 const float yaw_max_rad = 90.0f * DEG_TO_RAD;
-const float p_max = 200.0f * DEG_TO_RAD; // rad/s — sobe peso da taxa (mais "D")
-const float q_max = 200.0f * DEG_TO_RAD; // rad/s
+const float p_max = 100.0f * DEG_TO_RAD; // rad/s — sobe peso da taxa (mais "D")
+const float q_max = 100.0f * DEG_TO_RAD; // rad/s
 const float r_max = 200.0f * DEG_TO_RAD; // rad/s
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
@@ -317,7 +317,10 @@ void sdreTaskCode(void * parameter) {
             new_K_available = true;
             xSemaphoreGive(matricesMutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        
+        // Cede a CPU por apenas 1 tick do sistema (normalmente 1 ms),
+        // rodando o mais rápido possível no tempo ocioso sem travar o ESP32.
+        //vTaskDelay(1); 
     }
 }
 
