@@ -34,6 +34,11 @@ const bool USE_MAGNETOMETER = false;
 const int CONTROLLER_TYPE = 0;
 // ================================
 
+// ===== FLAG DE EXECUÇÃO DO SDRE =====
+// Coloque true para rodar a Riccati em uma Task separada (multithreading), false para rodar de forma síncrona no loop principal
+const bool USE_ASYNC_SDRE = true;
+// ====================================
+
 #include "sensor_config.h" 
 
 #include <Adafruit_MPU6050.h>
@@ -337,17 +342,16 @@ void setup()
     // Inicializa o Mutex antes de qualquer coisa para evitar assert fails (((pxQueue)))
     matricesMutex = xSemaphoreCreateMutex();
 
-    xTaskCreate(
-        sdreTaskCode,     // Função da task
-        "SDRETask",       // Nome da task
-        16384,            // Tamanho da stack (Riccati precisa de bastante RAM)
-        NULL,             // Parâmetro
-        0,                // Prioridade baixa (loop do Arduino tem prio 1)
-        &sdreTaskHandle   // Handle
-    );
-
-    // Desabilita o detector de brownout para evitar reset com queda de tensão da bateria
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    if (USE_ASYNC_SDRE) {
+        xTaskCreate(
+            sdreTaskCode,     // Função da task
+            "SDRETask",       // Nome da task
+            16384,            // Tamanho da stack (Riccati precisa de bastante RAM)
+            NULL,             // Parâmetro
+            0,                // Prioridade baixa (loop do Arduino tem prio 1)
+            &sdreTaskHandle   // Handle
+        );
+    }
 
     Serial.begin(115200);
     delay(1000);
@@ -606,23 +610,44 @@ void loop(){
     t_angles = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    // Atualiza estado compartilhado para a Task do SDRE
-    xSemaphoreTake(matricesMutex, portMAX_DELAY);
-    state_shared[0] = roll;
-    state_shared[1] = pitch;
-    state_shared[2] = yaw;
-    state_shared[3] = p;
-    state_shared[4] = q;
-    state_shared[5] = r;
-    state_shared[6] = omega_r;
-    xSemaphoreGive(matricesMutex);
+    if (USE_ASYNC_SDRE) {
+        // Atualiza estado compartilhado para a Task do SDRE
+        xSemaphoreTake(matricesMutex, portMAX_DELAY);
+        state_shared[0] = roll;
+        state_shared[1] = pitch;
+        state_shared[2] = yaw;
+        state_shared[3] = p;
+        state_shared[4] = q;
+        state_shared[5] = r;
+        state_shared[6] = omega_r;
+        xSemaphoreGive(matricesMutex);
+        
+        t_matrix = micros() - t_checkpoint;
+        t_checkpoint = micros();
 
-    // O updateSystemMatrix e computeGains foram movidos para a sdreTaskCode!
-    t_matrix = micros() - t_checkpoint;
-    t_checkpoint = micros();
+        t_lqr = micros() - t_checkpoint;
+        t_checkpoint = micros();
+    } else {
+        // Modo Síncrono: Calcula tudo no loop principal
+        unsigned long t_start = micros();
+        updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
+        sdre_t_updateMatrix = micros() - t_start;
+        t_matrix = micros() - t_checkpoint;
+        t_checkpoint = micros();
 
-    t_lqr = micros() - t_checkpoint;
-    t_checkpoint = micros();
+        t_start = micros();
+        float K_local_sync[CONTROL_SIZE * STATE_SIZE];
+        sdreController.computeGains();
+        sdreController.exportGains(K_local_sync);
+        sdre_t_computeGains = micros() - t_start;
+        t_lqr = micros() - t_checkpoint;
+        t_checkpoint = micros();
+
+        // Atualiza K_shared para manter a compatibilidade com a lógica logo abaixo
+        xSemaphoreTake(matricesMutex, portMAX_DELAY);
+        memcpy(K_shared, K_local_sync, sizeof(K_shared));
+        xSemaphoreGive(matricesMutex);
+    }
 
     // ===== LÓGICA DE CONTROLE =====
     float phi_desired, theta_desired, yaw_desired, thrust;
