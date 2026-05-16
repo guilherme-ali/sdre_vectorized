@@ -44,6 +44,7 @@ const int CONTROLLER_TYPE = 0;
 #include "WiFiComm.h" // Comunicação WiFi/UDP
 #include "led_control.h" // Controle de LEDs e bateria
 #include "Telemetry.h"   // Buffer circular de telemetria em RAM
+#include <BiquadFilter.h>
 
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
@@ -184,6 +185,13 @@ Adafruit_MPU6050 mpu;
 // Wire já é definido e inicializado
 
 Madgwick filter;
+
+// Instâncias dos filtros Butterworth
+BiquadFilter bq_ax, bq_ay, bq_az;
+BiquadFilter bq_gx, bq_gy, bq_gz;
+
+// O limite teórico (Nyquist) é 100Hz, o que quebra a matemática do filtro.
+const float SENSOR_CUTOFF_HZ = 80.0f; 
 
 // Variáveis de calibração do MPU6050
 // VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
@@ -400,6 +408,15 @@ void setup()
     
     leds.setSensorsCalibration(false); // Calibração concluída
 
+    // Inicializa Filtros Butterworth 
+    float fs = 1.0f / SAMPLING_TIME_S; // 200Hz
+    bq_ax.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_ay.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_az.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gx.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gy.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gz.begin(SENSOR_CUTOFF_HZ, fs);
+
     // Inicializa o controlador baseado no tipo selecionado.
     // updateSystemMatrix ja discretiza A,B,Q,R e propaga para o controller.
     updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -516,6 +533,15 @@ void loop(){
     read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
                  accel_offset_x, accel_offset_y, accel_offset_z,
                  gyro_offset_x, gyro_offset_y, gyro_offset_z);
+                 
+    // Aplicação do Filtro Butterworth
+    ax = bq_ax.update(ax);
+    ay = bq_ay.update(ay);
+    az = bq_az.update(az);
+    gx = bq_gx.update(gx);
+    gy = bq_gy.update(gy);
+    gz = bq_gz.update(gz);
+
     t_mpu = micros() - t_checkpoint;
     t_checkpoint = micros();
     
