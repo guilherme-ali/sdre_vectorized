@@ -707,17 +707,14 @@ void loop(){
     // Força o loop a rodar exatamente no período de amostragem configurado
     if (processingTime < LOOP_PERIOD_US) {
         unsigned long timeLeft = LOOP_PERIOD_US - processingTime;
-        // Dá espaço para a SDRETask rodar se sobrar tempo suficiente (pelo menos 2ms)
-        if (timeLeft > 2000) {
-            vTaskDelay( (timeLeft - 1000) / 1000 );
-        }
+        // Dá espaço para a SDRETask rodar
+        vTaskDelay(timeLeft / 1000);
         // Aguarda o resto do tempo em busy-wait para manter a precisão exata da amostragem
         while (micros() - startTime < LOOP_PERIOD_US) {
             // nothing
         }
     }
     
-    // Tempo total de execução do loop (deve ser ~12000 μs)
     unsigned long loopTime = micros() - startTime;
     
     // Estatísticas
