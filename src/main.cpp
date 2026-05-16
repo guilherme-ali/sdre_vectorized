@@ -58,7 +58,7 @@ const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
 const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
 const float m = 0.04690f;     // 46.9g
 const float L_ARM = 0.060f * 0.70710678f; // 60mm * sin(45°) - braço efetivo para X-quad
-const float SAMPLING_TIME_S = 0.013f; // 13 ms
+const float SAMPLING_TIME_S = 0.005f; // 5 ms
 const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 float omega_r = 0;
 
@@ -85,10 +85,31 @@ float mx, my, mz;
 float rvx = 0, rvy = 0, rvz = 0;
 float evx = 0, evy = 0, evz = 0;
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+// Semáforos para proteger as matrizes compartilhadas entre as tasks
+SemaphoreHandle_t matricesMutex;
+TaskHandle_t sdreTaskHandle;
+
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
 float Qd[STATE_SIZE * STATE_SIZE];
 float Rd[CONTROL_SIZE * CONTROL_SIZE];
+float K_shared[CONTROL_SIZE * STATE_SIZE];
+bool new_K_available = false;
+float state_shared[7]; // roll, pitch, yaw, p, q, r, omega_r
+
+// Timing da SDRETask (escritos pela task, lidos no loop de debug — sem mutex necessário)
+volatile unsigned long sdre_t_updateMatrix = 0;
+volatile unsigned long sdre_t_computeGains = 0;
+volatile unsigned long sdre_t_total        = 0;
+
+// Declaração do task handle
+// Removida pois já foi declarada antes
+
+// (código original continua...)
 
 // Matrizes do sistema
 float A[STATE_SIZE * STATE_SIZE] = {
@@ -273,8 +294,47 @@ void onClientDisconnected() {
     Serial.println("⚠️  Motores DESARMADOS por segurança!");
 }
 
+void sdreTaskCode(void * parameter) {
+    for(;;) {
+        if (CONTROLLER_TYPE == 0) {
+            float local_state[7];
+            xSemaphoreTake(matricesMutex, portMAX_DELAY);
+            memcpy(local_state, state_shared, sizeof(local_state));
+            xSemaphoreGive(matricesMutex);
+
+            unsigned long _t0 = micros();
+            updateSystemMatrix(local_state[0], local_state[1], local_state[2], local_state[3], local_state[4], local_state[5], local_state[6]);
+            unsigned long _t1 = micros();
+            sdreController.computeGains();
+            unsigned long _t2 = micros();
+
+            sdre_t_updateMatrix = _t1 - _t0;
+            sdre_t_computeGains = _t2 - _t1;
+            sdre_t_total        = _t2 - _t0;
+
+            xSemaphoreTake(matricesMutex, portMAX_DELAY);
+            sdreController.exportGains(K_shared);
+            new_K_available = true;
+            xSemaphoreGive(matricesMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
 void setup()
 {
+    // Inicializa o Mutex antes de qualquer coisa para evitar assert fails (((pxQueue)))
+    matricesMutex = xSemaphoreCreateMutex();
+
+    xTaskCreate(
+        sdreTaskCode,     // Função da task
+        "SDRETask",       // Nome da task
+        16384,            // Tamanho da stack (Riccati precisa de bastante RAM)
+        NULL,             // Parâmetro
+        0,                // Prioridade baixa (loop do Arduino tem prio 1)
+        &sdreTaskHandle   // Handle
+    );
+
     // Desabilita o detector de brownout para evitar reset com queda de tensão da bateria
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
@@ -517,14 +577,21 @@ void loop(){
     t_angles = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
+    // Atualiza estado compartilhado para a Task do SDRE
+    xSemaphoreTake(matricesMutex, portMAX_DELAY);
+    state_shared[0] = roll;
+    state_shared[1] = pitch;
+    state_shared[2] = yaw;
+    state_shared[3] = p;
+    state_shared[4] = q;
+    state_shared[5] = r;
+    state_shared[6] = omega_r;
+    xSemaphoreGive(matricesMutex);
+
+    // O updateSystemMatrix e computeGains foram movidos para a sdreTaskCode!
     t_matrix = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    // Calcula os ganhos ótimos (somente para SDRE)
-    if (CONTROLLER_TYPE == 0) {
-        sdreController.computeGains();
-    }
     t_lqr = micros() - t_checkpoint;
     t_checkpoint = micros();
 
@@ -564,10 +631,25 @@ void loop(){
 
     // Calcula controle baseado no tipo de controlador selecionado
     if (CONTROLLER_TYPE == 0) {
-        // SDRE Controller
-        sdreController.updateState(x);
-        sdreController.updateReference(ref);
-        sdreController.calculateControl(u);
+        // SDRE Controller (usando ganhos compartilhados da Task)
+        memset(u, 0, CONTROL_SIZE * sizeof(float));
+        
+        xSemaphoreTake(matricesMutex, portMAX_DELAY);
+        float K_local[CONTROL_SIZE * STATE_SIZE];
+        memcpy(K_local, K_shared, sizeof(K_local));
+        xSemaphoreGive(matricesMutex);
+
+        for (int i = 0; i < CONTROL_SIZE; i++) {
+            for (int j = 0; j < STATE_SIZE; j++) {
+                // u = -K*x
+                u[i] -= K_local[i * STATE_SIZE + j] * x[j];
+                
+                // Kr*ref (sendo Kr a matriz negativa das primeiras CONTROL_SIZE colunas de K)
+                if(j < CONTROL_SIZE) {
+                    u[i] += (-K_local[i * STATE_SIZE + j]) * ref[j];
+                }
+            }
+        }
     } else {
         // PID Controller
         pidController.updateState(x);
@@ -624,7 +706,15 @@ void loop(){
     
     // Força o loop a rodar exatamente no período de amostragem configurado
     if (processingTime < LOOP_PERIOD_US) {
-        delayMicroseconds(LOOP_PERIOD_US - processingTime);
+        unsigned long timeLeft = LOOP_PERIOD_US - processingTime;
+        // Dá espaço para a SDRETask rodar se sobrar tempo suficiente (pelo menos 2ms)
+        if (timeLeft > 2000) {
+            vTaskDelay( (timeLeft - 1000) / 1000 );
+        }
+        // Aguarda o resto do tempo em busy-wait para manter a precisão exata da amostragem
+        while (micros() - startTime < LOOP_PERIOD_US) {
+            // nothing
+        }
     }
     
     // Tempo total de execução do loop (deve ser ~12000 μs)
@@ -699,6 +789,13 @@ void loop(){
             Serial.printf("   Tempo_Processamento: %lu μs\n", processingTime);
             Serial.printf("   Tempo_Maximo: %lu μs\n", maxTime);
             Serial.printf("   Tempo_Medio: %.2f μs\n", avgTime);
+
+            if (CONTROLLER_TYPE == 0) {
+                Serial.println("\n⚙️  SDRE TASK (fora do loop de 5ms):");
+                Serial.printf("   updateSystemMatrix: %4lu μs\n", sdre_t_updateMatrix);
+                Serial.printf("   computeGains (DARE): %4lu μs\n", sdre_t_computeGains);
+                Serial.printf("   Total SDRE:          %4lu μs  (rodando a ~20 Hz em task separada)\n", sdre_t_total);
+            }
             
             // Status de controle
             if (tilt_failsafe_latched) {
@@ -982,7 +1079,6 @@ void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, fl
     Qd[4 * STATE_SIZE + 5] = q45; Qd[5 * STATE_SIZE + 4] = q45;
 
     // ===== Rd = R*dt + (B^T·Q·B)*dt^3/3 — B esparso + Q diag => Rd diagonal =====
-    // (constante de fato, mas mantido dentro da funcao por pedido do usuario.)
     static const float dt3_over_3 = dt * dt * dt / 3.0f;
     memset(Rd, 0, sizeof(float) * CONTROL_SIZE * CONTROL_SIZE);
     Rd[0 * CONTROL_SIZE + 0] = R_11 * dt + (Q_44 * inv_Ixx * inv_Ixx) * dt3_over_3;
