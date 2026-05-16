@@ -15,7 +15,7 @@
 
 // ===== FLAG DE DEBUG =====
 // Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
+const bool DEBUG_MODE = true;
 // ==========================
 
 // ===== FLAG DE TELEMETRIA =====
@@ -336,13 +336,6 @@ void setup()
     }
     
     leds.setSensorsCalibration(false); // Calibração concluída
-
-    // Discretiza a matriz B
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            Bd[i * CONTROL_SIZE + j] = B[i * CONTROL_SIZE + j] * SAMPLING_TIME_S;
-        }
-    }
 
     // Inicializa o controlador baseado no tipo selecionado.
     // updateSystemMatrix ja discretiza A,B,Q,R e propaga para o controller.
@@ -850,110 +843,152 @@ void loop(){
 }
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r, float omega_r) {
-    // Atualiza a matriz A contínua com as velocidades angulares atuais
-    // As três primeiras linhas permanecem constantes
+    // Versao esparsa: alpha=(1,0,0) hardcoded; A tem 11 nao-nulos; B tem 3 nao-nulos
+    // (B[3,0]=1/Ixx, B[4,1]=1/Iyy, B[5,2]=1/Izz); Q diagonal. Ad/Bd/Qd montados
+    // diretamente a partir das formulas analiticas (Taylor 2a/3a ordem), evitando
+    // ~700 muls de matrixMultiply genericos.
 
-    float alpha_1 = 1.0f;
-    float alpha_2 = 0.0f;
-    float alpha_3 = 0.0f;      
+    static const float inv_Ixx          = 1.0f / Ixx;
+    static const float inv_Iyy          = 1.0f / Iyy;
+    static const float inv_Izz          = 1.0f / Izz;
+    static const float Iyy_Izz_over_Ixx = (Iyy - Izz) / Ixx;
+    static const float Izz_Ixx_over_Iyy = (Izz - Ixx) / Iyy;
+    static const float Ixx_Iyy_over_Izz = (Ixx - Iyy) / Izz;
+    static const float Ir_over_Ixx      = Ir / Ixx;
+    static const float Ir_over_Iyy      = Ir / Iyy;
+    static const float dt               = SAMPLING_TIME_S;
+    static const float dt2_2            = dt * dt * 0.5f;
 
-    float sin_roll = sin(roll);
-    float cos_roll = cos(roll);
-    float cos_pitch = cos(pitch);
-    float tan_pitch = tan(pitch);
-    float inv_cos_pitch = 1.0f / cos_pitch;
-    
-    A[0 * STATE_SIZE + 3] = 1;
-    A[0 * STATE_SIZE + 4] = sin_roll * tan_pitch;
-    A[0 * STATE_SIZE + 5] = cos_roll * tan_pitch;
+    float sR, cR, sP, cP;
+    sincosf(roll,  &sR, &cR);
+    sincosf(pitch, &sP, &cP);
+    const float inv_cP = 1.0f / cP;
+    const float tP     = sP * inv_cP;
 
-    A[1 * STATE_SIZE + 4] = cos_roll;
-    A[1 * STATE_SIZE + 5] = -sin_roll;
+    // 11 entradas nao-nulas de A.
+    const float A03 = 1.0f;
+    const float A04 = sR * tP;
+    const float A05 = cR * tP;
+    const float A14 = cR;
+    const float A15 = -sR;
+    const float A24 = sR * inv_cP;
+    const float A25 = cR * inv_cP;
+    const float A34 = Iyy_Izz_over_Ixx * r - Ir_over_Ixx * omega_r;
+    const float A43 = Ir_over_Iyy * omega_r;
+    const float A45 = Izz_Ixx_over_Iyy * p;
+    const float A54 = Ixx_Iyy_over_Izz * p;
 
-    A[2 * STATE_SIZE + 4] = sin_roll * inv_cos_pitch;
-    A[2 * STATE_SIZE + 5] = cos_roll * inv_cos_pitch;
-    
-    // Linha 4 (índice 3)
-    A[3 * STATE_SIZE + 4] = alpha_1 * ((Iyy - Izz) / Ixx) * r - Ir * omega_r / Ixx;
-    A[3 * STATE_SIZE + 5] = (1 - alpha_1) * ((Iyy - Izz) / Ixx) * q;
-    
-    // Linha 5 (índice 4)
-    A[4 * STATE_SIZE + 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r + Ir * omega_r / Iyy;
-    A[4 * STATE_SIZE + 5] = (1 - alpha_2) * ((Izz - Ixx) / Iyy) * p;
-    
-    // Linha 6 (índice 5)
-    A[5 * STATE_SIZE + 3] = alpha_3 * ((Ixx - Iyy) / Izz) * q;
-    A[5 * STATE_SIZE + 4] = (1 - alpha_3) * ((Ixx - Iyy) / Izz) * p;
-    
-    // Discretiza a matriz A atualizada
-    const float dt = SAMPLING_TIME_S;
+    // Reflete no array global A (apenas posicoes variaveis - restante ja eh 0).
+    A[0 * STATE_SIZE + 3] = A03;
+    A[0 * STATE_SIZE + 4] = A04;
+    A[0 * STATE_SIZE + 5] = A05;
+    A[1 * STATE_SIZE + 4] = A14;
+    A[1 * STATE_SIZE + 5] = A15;
+    A[2 * STATE_SIZE + 4] = A24;
+    A[2 * STATE_SIZE + 5] = A25;
+    A[3 * STATE_SIZE + 4] = A34;
+    A[3 * STATE_SIZE + 5] = 0.0f;
+    A[4 * STATE_SIZE + 3] = A43;
+    A[4 * STATE_SIZE + 5] = A45;
+    A[5 * STATE_SIZE + 3] = 0.0f;
+    A[5 * STATE_SIZE + 4] = A54;
 
-    // Calcula A^2 para melhor aproximação da discretização
-    float A2[STATE_SIZE * STATE_SIZE] = {0};
-    MatrixOperations::matrixMultiply(A, A, A2, STATE_SIZE, STATE_SIZE, STATE_SIZE);
-    
-    // Ad = I + A*dt + (A^2*dt^2)/2 (aproximação de Taylor de 2ª ordem)
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < STATE_SIZE; j++) {
-            if (i == j) {
-                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * dt + 
-                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
-            } else {
-                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * dt + 
-                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
-            }
-        }
-    }
+    // ===== A^2 esparso: 14 entradas (Σ_k A[i,k]·A[k,j], k em {3,4,5}) =====
+    const float A2_03 = A04 * A43;
+    const float A2_04 = A34 + A05 * A54;
+    const float A2_05 = A04 * A45;
+    const float A2_13 = A14 * A43;
+    const float A2_14 = A15 * A54;
+    const float A2_15 = A14 * A45;
+    const float A2_23 = A24 * A43;
+    const float A2_24 = A25 * A54;
+    const float A2_25 = A24 * A45;
+    const float A2_33 = A34 * A43;
+    const float A2_35 = A34 * A45;
+    const float A2_44 = A43 * A34 + A45 * A54;
+    const float A2_53 = A54 * A43;
+    const float A2_55 = A54 * A45;
 
-    // Discretiza a matriz B com aproximação de segunda ordem: Bd = (I*dt + A*dt^2/2)*B = B*dt + A*B*dt^2/2
-    float AB[STATE_SIZE * CONTROL_SIZE] = {0};
-    MatrixOperations::matrixMultiply(A, B, AB, STATE_SIZE, STATE_SIZE, CONTROL_SIZE);
+    // ===== Ad = I + A*dt + A^2*dt^2/2 =====
+    memset(Ad, 0, sizeof(float) * STATE_SIZE * STATE_SIZE);
+    Ad[0 * STATE_SIZE + 0] = 1.0f;
+    Ad[1 * STATE_SIZE + 1] = 1.0f;
+    Ad[2 * STATE_SIZE + 2] = 1.0f;
+    Ad[3 * STATE_SIZE + 3] = 1.0f + A2_33 * dt2_2;
+    Ad[4 * STATE_SIZE + 4] = 1.0f + A2_44 * dt2_2;
+    Ad[5 * STATE_SIZE + 5] = 1.0f + A2_55 * dt2_2;
 
-    float dt2_over_2 = dt * dt * 0.5f;
+    Ad[0 * STATE_SIZE + 3] = A03 * dt + A2_03 * dt2_2;
+    Ad[0 * STATE_SIZE + 4] = A04 * dt + A2_04 * dt2_2;
+    Ad[0 * STATE_SIZE + 5] = A05 * dt + A2_05 * dt2_2;
+    Ad[1 * STATE_SIZE + 3] =            A2_13 * dt2_2;
+    Ad[1 * STATE_SIZE + 4] = A14 * dt + A2_14 * dt2_2;
+    Ad[1 * STATE_SIZE + 5] = A15 * dt + A2_15 * dt2_2;
+    Ad[2 * STATE_SIZE + 3] =            A2_23 * dt2_2;
+    Ad[2 * STATE_SIZE + 4] = A24 * dt + A2_24 * dt2_2;
+    Ad[2 * STATE_SIZE + 5] = A25 * dt + A2_25 * dt2_2;
+    Ad[3 * STATE_SIZE + 4] = A34 * dt;
+    Ad[3 * STATE_SIZE + 5] =            A2_35 * dt2_2;
+    Ad[4 * STATE_SIZE + 3] = A43 * dt;
+    Ad[4 * STATE_SIZE + 5] = A45 * dt;
+    Ad[5 * STATE_SIZE + 3] =            A2_53 * dt2_2;
+    Ad[5 * STATE_SIZE + 4] = A54 * dt;
 
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            int index = i * CONTROL_SIZE + j;
-            Bd[index] = B[index] * dt + AB[index] * dt2_over_2;
-        }
-    }
+    // ===== Bd = B*dt + A*B*dt^2/2; B esparso => (A*B)[i,j] = A[i,3+j]·(1/I_jj) =====
+    memset(Bd, 0, sizeof(float) * STATE_SIZE * CONTROL_SIZE);
+    Bd[0 * CONTROL_SIZE + 0] = A03 * inv_Ixx * dt2_2;
+    Bd[0 * CONTROL_SIZE + 1] = A04 * inv_Iyy * dt2_2;
+    Bd[0 * CONTROL_SIZE + 2] = A05 * inv_Izz * dt2_2;
+    Bd[1 * CONTROL_SIZE + 1] = A14 * inv_Iyy * dt2_2;
+    Bd[1 * CONTROL_SIZE + 2] = A15 * inv_Izz * dt2_2;
+    Bd[2 * CONTROL_SIZE + 1] = A24 * inv_Iyy * dt2_2;
+    Bd[2 * CONTROL_SIZE + 2] = A25 * inv_Izz * dt2_2;
+    Bd[3 * CONTROL_SIZE + 0] = inv_Ixx * dt;
+    Bd[3 * CONTROL_SIZE + 1] = A34 * inv_Iyy * dt2_2;
+    Bd[4 * CONTROL_SIZE + 0] = A43 * inv_Ixx * dt2_2;
+    Bd[4 * CONTROL_SIZE + 1] = inv_Iyy * dt;
+    Bd[4 * CONTROL_SIZE + 2] = A45 * inv_Izz * dt2_2;
+    Bd[5 * CONTROL_SIZE + 1] = A54 * inv_Iyy * dt2_2;
+    Bd[5 * CONTROL_SIZE + 2] = inv_Izz * dt;
 
-    // ====================================================================
-    // Discretizacao das matrizes de custo Q e R (ZOH, Taylor).
-    // J_c = integral(x'Qx + u'Ru)dt -> J_d = soma(x_k' Q_d x_k + u_k' R_d u_k).
-    //   Q_d = integral_0^dt(Phi'(tau) Q Phi(tau) dtau)
-    //       ≈ Q*dt + (A'Q + Q A)*dt^2/2                            (2a ordem)
-    //   R_d = R*dt + integral_0^dt(Gamma'(tau) Q Gamma(tau) dtau)
-    //       ≈ R*dt + (B' Q B)*dt^3/3                                (3a ordem)
-    //   N_d (termo cruzado) ignorado: SDA atual nao usa cross-term.
-    // ====================================================================
-    float A_T[STATE_SIZE * STATE_SIZE] = {0};
-    float AT_Q[STATE_SIZE * STATE_SIZE] = {0};
-    float QA_mat[STATE_SIZE * STATE_SIZE] = {0};
-    MatrixOperations::transposeMatrix(A, A_T, STATE_SIZE, STATE_SIZE);
-    MatrixOperations::matrixMultiply(A_T, Q, AT_Q, STATE_SIZE, STATE_SIZE, STATE_SIZE);
-    MatrixOperations::matrixMultiply(Q, A, QA_mat, STATE_SIZE, STATE_SIZE, STATE_SIZE);
+    // ===== Qd = Q*dt + (A^T·Q + Q·A)*dt^2/2; Q diagonal, simetrico =====
+    // (A^T·Q + Q·A)[i,j] = A[j,i]·Q[j,j] + Q[i,i]·A[i,j].
+    memset(Qd, 0, sizeof(float) * STATE_SIZE * STATE_SIZE);
+    Qd[0 * STATE_SIZE + 0] = Q_11 * dt;
+    Qd[1 * STATE_SIZE + 1] = Q_22 * dt;
+    Qd[2 * STATE_SIZE + 2] = Q_33 * dt;
+    Qd[3 * STATE_SIZE + 3] = Q_44 * dt;
+    Qd[4 * STATE_SIZE + 4] = Q_55 * dt;
+    Qd[5 * STATE_SIZE + 5] = Q_66 * dt;
 
-    for (int i = 0; i < STATE_SIZE * STATE_SIZE; i++) {
-        Qd[i] = Q[i] * dt + (AT_Q[i] + QA_mat[i]) * dt2_over_2;
-    }
+    const float q03 = Q_11 * A03 * dt2_2; // A[3,0]=0
+    const float q04 = Q_11 * A04 * dt2_2; // A[4,0]=0
+    const float q05 = Q_11 * A05 * dt2_2; // A[5,0]=0
+    const float q14 = Q_22 * A14 * dt2_2; // A[4,1]=0
+    const float q15 = Q_22 * A15 * dt2_2; // A[5,1]=0
+    const float q24 = Q_33 * A24 * dt2_2; // A[4,2]=0
+    const float q25 = Q_33 * A25 * dt2_2; // A[5,2]=0
+    const float q34 = (A43 * Q_55 + Q_44 * A34) * dt2_2;
+    const float q45 = (A54 * Q_66 + Q_55 * A45) * dt2_2;
 
-    // Termo de 3a ordem em R_d: (B' Q B) * dt^3 / 3
-    float B_T[CONTROL_SIZE * STATE_SIZE] = {0};
-    float BT_Q[CONTROL_SIZE * STATE_SIZE] = {0};
-    float BT_Q_B[CONTROL_SIZE * CONTROL_SIZE] = {0};
-    MatrixOperations::transposeMatrix(B, B_T, STATE_SIZE, CONTROL_SIZE);
-    MatrixOperations::matrixMultiply(B_T, Q, BT_Q, CONTROL_SIZE, STATE_SIZE, STATE_SIZE);
-    MatrixOperations::matrixMultiply(BT_Q, B, BT_Q_B, CONTROL_SIZE, STATE_SIZE, CONTROL_SIZE);
+    Qd[0 * STATE_SIZE + 3] = q03; Qd[3 * STATE_SIZE + 0] = q03;
+    Qd[0 * STATE_SIZE + 4] = q04; Qd[4 * STATE_SIZE + 0] = q04;
+    Qd[0 * STATE_SIZE + 5] = q05; Qd[5 * STATE_SIZE + 0] = q05;
+    Qd[1 * STATE_SIZE + 4] = q14; Qd[4 * STATE_SIZE + 1] = q14;
+    Qd[1 * STATE_SIZE + 5] = q15; Qd[5 * STATE_SIZE + 1] = q15;
+    Qd[2 * STATE_SIZE + 4] = q24; Qd[4 * STATE_SIZE + 2] = q24;
+    Qd[2 * STATE_SIZE + 5] = q25; Qd[5 * STATE_SIZE + 2] = q25;
+    Qd[3 * STATE_SIZE + 4] = q34; Qd[4 * STATE_SIZE + 3] = q34;
+    Qd[4 * STATE_SIZE + 5] = q45; Qd[5 * STATE_SIZE + 4] = q45;
 
-    const float dt3_over_3 = dt * dt * dt / 3.0f;
-    for (int i = 0; i < CONTROL_SIZE * CONTROL_SIZE; i++) {
-        Rd[i] = R[i] * dt + BT_Q_B[i] * dt3_over_3;
-    }
+    // ===== Rd = R*dt + (B^T·Q·B)*dt^3/3 — B esparso + Q diag => Rd diagonal =====
+    // (constante de fato, mas mantido dentro da funcao por pedido do usuario.)
+    static const float dt3_over_3 = dt * dt * dt / 3.0f;
+    memset(Rd, 0, sizeof(float) * CONTROL_SIZE * CONTROL_SIZE);
+    Rd[0 * CONTROL_SIZE + 0] = R_11 * dt + (Q_44 * inv_Ixx * inv_Ixx) * dt3_over_3;
+    Rd[1 * CONTROL_SIZE + 1] = R_22 * dt + (Q_55 * inv_Iyy * inv_Iyy) * dt3_over_3;
+    Rd[2 * CONTROL_SIZE + 2] = R_33 * dt + (Q_66 * inv_Izz * inv_Izz) * dt3_over_3;
 
-    // Atualiza o controlador SDRE com matrizes discretizadas.
-    // (PID não usa matrizes do modelo, então só roda para SDRE.)
-    // Bd e Qd dependem de A(x): recalculados a cada iter; propagar para o controller.
     if (CONTROLLER_TYPE == 0) {
         sdreController.setStateMatrix(Ad);
         sdreController.setInputMatrix(Bd);
