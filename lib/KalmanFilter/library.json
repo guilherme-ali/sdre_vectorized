@@ -1,0 +1,11 @@
+{
+  "name": "KalmanFilter",
+  "version": "1.0.0",
+  "description": "Linear Kalman filter for SDRE attitude estimation (uses MatrixOperations from AUTOLQR).",
+  "dependencies": {
+    "AUTOLQR": "*"
+  },
+  "build": {
+    "flags": ["-I../AUTOLQR"]
+  }
+}

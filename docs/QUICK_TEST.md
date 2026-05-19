@@ -1,4 +1,4 @@
-# 🚀 Teste Rápido - Conexão WiFi LiteWing
+# 🚀 Teste Rápido - Conexão WiFi ESP-Drone
 
 ## ⚡ Início Rápido (5 minutos)
 
@@ -16,7 +16,7 @@ pio device monitor
 Você deve ver:
 ```
 ╔════════════════════════════════════╗
-║  ESP32 DRONE - LiteWing Compatible ║
+║  ESP32 DRONE - ESP-Drone Compatible ║
 ╚════════════════════════════════════╝
 
 📡 Configurando WiFi Access Point...
@@ -36,8 +36,8 @@ Você deve ver:
 3. Conectar em **ESP-DRONE**
 4. Senha: **12345678**
 
-### 4️⃣ Abrir App LiteWing
-1. Abrir app **LiteWing**
+### 4️⃣ Abrir App ESP-Drone
+1. Abrir app **ESP-Drone**
 2. Clicar botão **LINK** (canto superior)
 3. Aguardar mensagem "Connected"
 
@@ -67,7 +67,7 @@ Mova os joysticks no app. Você verá:
 
 - [ ] ESP32 criou rede WiFi "ESP-DRONE"
 - [ ] Smartphone conectou na rede
-- [ ] App LiteWing mostrou "Connected"
+- [ ] App ESP-Drone mostrou "Connected"
 - [ ] Serial Monitor mostra "🎉 CLIENTE CONECTADO!"
 - [ ] Movendo joysticks mostra valores no Serial
 - [ ] Valores de roll, pitch, yaw mudam ao mover sticks
@@ -151,7 +151,7 @@ Tempo_Medio: 2600 μs
    Thrust: 32768
 ```
 
-### App LiteWing Correto:
+### App ESP-Drone Correto:
 - Status: **Connected** (verde)
 - LED piscando ao mover joysticks
 - Valores numéricos mudando na tela

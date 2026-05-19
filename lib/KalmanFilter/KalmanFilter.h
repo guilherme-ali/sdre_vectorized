@@ -1,7 +1,7 @@
 #ifndef KALMAN_FILTER_H
 #define KALMAN_FILTER_H
 
-#include "MatrixOperations.h"
+#include <MatrixOperations.h> // de lib/AUTOLQR/
 
 /**
  * @class KalmanFilter

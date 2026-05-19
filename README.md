@@ -1,162 +1,157 @@
 # SDRE_VECTORIZED
 
-Sistema de controle SDRE (State-Dependent Riccati Equation) vetorizado para estabilização de atitude de VANTs (Veículos Aéreos Não Tripulados) em tempo real, implementado em ESP32.
+Controle de atitude de quadricóptero em **ESP32-S2** com **SDRE-LQR** (State-Dependent Riccati Equation) recalculado em tempo real. O sistema resolve a DARE a cada ciclo via uma das implementações otimizadas disponíveis (SDA, ADDA, etc.), com PID como alternativa selecionável.
 
-## 📋 Descrição
+## Visão geral
 
-Este projeto implementa um controlador LQR adaptativo baseado na técnica SDRE para controle de atitude de quadricópteros. O sistema resolve a equação algébrica de Riccati discreta (DARE) em tempo real utilizando múltiplos algoritmos otimizados para microcontroladores.
+- **Controle SDRE em tempo real** — ganhos K recalculados ciclo a ciclo a partir de A(x)
+- **Multiplos solvers DARE** — 7 algoritmos implementados em `lib/AUTOLQR/` (benchmark abaixo)
+- **PID alternativo** — controlador PID compatível com a mesma interface, selecionável via flag
+- **Madgwick (AHRS)** — estimação de orientação a partir de MPU6050 (+ QMC5883L opcional)
+- **Butterworth digital** — filtro passa-baixa por eixo antes do AHRS (anti-aliasing em 200 Hz)
+- **Riccati em FreeRTOS task** — DARE desacoplada do loop principal (5 ms) via mutex
+- **Telemetria em RAM + LittleFS** — buffer circular de 1000 amostras, persistido em flash ao desarmar
+- **WiFi/UDP (CRTP)** — protocolo Crazyflie, compatível com o app **ESP-Drone** (Espressif)
+- **Failsafe de tilt** — desarma e trava motores em inclinação > 60° (zona singular `1/cos(pitch)`)
 
-### Características Principais
+## Hardware
 
-- **Controle SDRE em tempo real** - Recálculo dos ganhos a cada ciclo de controle
-- **Múltiplos solvers DARE** - 7 algoritmos diferentes para resolver a equação de Riccati
-- **Filtro Madgwick** - Estimação de orientação (AHRS) em tempo real a partir de dados da IMU
-- **Comunicação WiFi (CRTP)** - Telemetria e controle remoto via UDP compatível com app LiteWing
-- **Gestão de Energia e Status** - Monitoramento de tensão da bateria com fail-safe e LEDs indicadores
-- **Otimizado para ESP32** - Uso eficiente de memória e processamento
+| Componente       | Modelo                        | Observação                       |
+|------------------|-------------------------------|----------------------------------|
+| Microcontrolador | ESP32-S2 Saola-1              | 240 MHz, single-core             |
+| IMU              | MPU6050                       | I2C (SDA=GPIO11, SCL=GPIO10)     |
+| Magnetômetro     | QMC5883L (opcional, 9-DOF)    | Mesmo barramento I2C             |
+| Motores          | 4× brushed, hélice 55 mm      | PWM 25 kHz, 10-bit               |
+| Bateria          | LiPo 1S 3.7 V                 | Monitorada por ADC (GPIO2)       |
+| LEDs status      | RGB + branco (always-on HW)   | GPIO 7/8/9                       |
 
-## 🔧 Hardware Suportado
-
-- **Microcontrolador**: ESP32 (240MHz dual-core) - *Idealmente a placa **ESP32 Drone da Espressif***
-- **IMU**: MPU6050
-- **Magnetômetro**: HMC5883L / QMC5883L (opcional)
-- **ESCs**: PWM padrão
-- **Frame**: Quadricóptero em configuração X
-
-## 📁 Estrutura do Projeto
+## Estrutura do projeto
 
 ```
 SDRE_VECTORIZED/
-├── docs/                     # Guias e documentações auxiliares
-├── src/                      # Código fonte principal
-│   └── main.cpp              # Ponto de entrada do sistema
-├── lib/                      # Bibliotecas do projeto
-│   ├── AUTOLQR/              # Biblioteca principal de controle LQR
-│   │   ├── AutoLQR.cpp/h     # Classe principal com solvers DARE
-│   │   ├── KalmanFilter.cpp/h # Filtro de Kalman para estimação
-│   │   └── MatrixOperations.cpp/h # Operações matriciais otimizadas
-│   ├── MotorControl/         # Controle de motores e ESCs
-│   ├── WiFiComm/             # Comunicação WiFi para telemetria
-│   └── utils/                # Utilitários (LED, sensores, etc.)
-├── python/                   # Scripts de simulação e análise
-│   ├── sim_control.py        # Simulação do sistema de controle
-│   ├── compara_solvers.py    # Comparação de solvers em Python
-│   └── outputs/              # Gráficos e resultados
-└── test/                     # Testes e benchmarks
+├── platformio.ini            # Configuração PlatformIO (ESP32-S2, lib_deps)
+├── src/
+│   └── main.cpp              # Loop principal + SDRETask + montagem das matrizes
+├── lib/
+│   ├── AUTOLQR/              # 7 solvers DARE (SDA, ADDA, ASDA, ...) + operações matriciais
+│   ├── KalmanFilter/         # Filtro de Kalman linear (opcional — alternativa ao Madgwick)
+│   ├── PIDController/        # PID compatível com interface SDRE (controlador alternativo)
+│   ├── BiquadFilter/         # Butterworth de 2ª ordem para sinais da IMU
+│   ├── Telemetry/            # Buffer circular em RAM + persistência em LittleFS
+│   ├── MotorControl/         # PWM dos 4 ESCs + armar/desarmar + mapeamento ω² → throttle
+│   ├── WiFiComm/             # Servidor UDP CRTP (compatível com app ESP-Drone)
+│   └── utils/                # Drivers MPU6050/QMC5883L, LEDs/bateria, alocação X-quad
+├── python/
+│   ├── atitude_sim.py            # Simulação do controle de atitude
+│   ├── compara_solvers.py        # Comparação dos solvers DARE
+│   ├── plot_telemetry.py         # Plota CSV exportado pela telemetria do drone
+│   ├── simulador/                # Notebook (Jupyter) com simulações exploratórias
+│   ├── matriz_otima/             # Busca/análise dos parâmetros ótimos de Q,R
+│   ├── execucao_otima/           # Execução da matriz ótima encontrada
+│   └── outputs/                  # Resultados (PNG, MP4, XLSX, CSV)
+├── test/                     # Calibração de sensores, benchmarks, testes unitários
+└── docs/                     # Guias auxiliares (LED, calibração, WiFi, quick start)
 ```
 
-## 🚀 Instalação
-
-### Pré-requisitos
-
-- [PlatformIO](https://platformio.org/) (VS Code Extension recomendada)
-- ESP32 DevKit ou similar
-- Python 3.8+ (para simulações)
-
-### Compilação
-
-```bash
-# Clone o repositório
-git clone https://github.com/seu-usuario/SDRE_VECTORIZED.git
-cd SDRE_VECTORIZED
-
-# Compile e envie para o ESP32
-pio run --target upload
-
-# Monitor serial
-pio device monitor
-```
-
-## 📊 Benchmark dos Solvers DARE
-
-O projeto inclui implementações de 7 métodos para resolver a DARE, com benchmark integrado:
-
-| Método | Tempo Médio (μs) | Desvio Padrão | Erro RMS vs Referência |
-|--------|------------------|---------------|------------------------|
-| **SDA** | 8303.78 | 12.12 | 4.99e-05 |
-| **SDA-ss** | 8503.93 | 12.91 | 4.98e-05 |
-| **ASDA** | 9020.53 | 11.46 | 1.69e-05 |
-| **SDA Scaled** | 8666.85 | 12.05 | 4.69e-05 |
-| **ADDA** | 8277.27 | 13.36 | 4.99e-05 |
-| **Van Dooren** | 41915.83 | 5825.84 | 4.05e-05 |
-| **Iterativo** | 13333.36 | 2125.54 | Referência |
-
-*Testes realizados em ESP32 @ 240MHz, sistema 6 estados x 3 controles, 100 iterações*
-
-### Recomendações de Uso
-
-- **ADDA**: Melhor relação velocidade/precisão para uso em tempo real
-- **SDA**: Boa opção com menor variância
-- **Iterativo**: Alta precisão, ideal como referência ou com warm-start
-
-## 🎮 Uso Básico
+## Configuração rápida (flags em `src/main.cpp`)
 
 ```cpp
-#include <AutoLQR.h>
-
-// Criar controlador (6 estados, 3 controles)
-AutoLQR lqr(6, 3);
-
-// Configurar matrizes de custo
-lqr.setCostMatrices(Q, R);
-
-// Loop de controle
-void loop() {
-    // Atualizar matrizes do sistema (SDRE)
-    lqr.setStateMatrix(Ad);
-    lqr.setInputMatrix(Bd);
-    
-    // Calcular ganhos (escolher método)
-    lqr.computeGains("ADDA");  // ou "SDA", "ITERATIVE", etc.
-    
-    // Atualizar estado e calcular controle
-    lqr.updateState(x);
-    lqr.updateReference(ref);
-    lqr.calculateControl(u);
-}
+const bool DEBUG_MODE       = false; // true: prints detalhados; false: Serial Plotter
+const bool PRINT_TELEMETRY  = false; // stream contínuo roll/pitch/yaw/p/q/r
+const bool USE_MAGNETOMETER = false; // 9-DOF (QMC5883L) ou 6-DOF (só accel+gyro)
+const int  CONTROLLER_TYPE  = 0;     // 0 = SDRE, 1 = PID
+const bool USE_ASYNC_SDRE   = true;  // true: Riccati em FreeRTOS task; false: síncrono
 ```
 
-## 📚 Documentação
+## Compilação
 
-- [AUTOLQR Library](lib/AUTOLQR/README.md) - Documentação da biblioteca de controle
-- [Motor Calibration](lib/MotorControl/MOTOR_CALIBRATION_GUIDE.md) - Guia de calibração dos motores
-- [WiFi Integration](docs/WIFI_INTEGRATION.md) - Configuração da comunicação WiFi e App LiteWing
-- [Quick Test](docs/QUICK_TEST.md) - Guia rápido para testar a conexão com o controle remoto
-- [LED & Battery Guide](docs/LED_BATTERY_GUIDE.md) - Indicadores LED e monitoramento de bateria
+Pré-requisitos: [PlatformIO](https://platformio.org/) (extensão VS Code recomendada), Python 3.8+ para simulações.
 
-## 🧮 Modelo do Sistema
+```bash
+pio run                    # compila
+pio run --target upload    # envia para o ESP32-S2
+pio device monitor         # monitor serial (115200 baud)
+```
 
-O sistema de atitude do quadricóptero é modelado como:
+## Benchmark dos solvers DARE
 
-**Estados** (6): `[φ, θ, ψ, p, q, r]` (ângulos de Euler + velocidades angulares)
+ESP32-S2 @ 240 MHz, sistema 6 estados × 3 controles, **800 000 execuções** sob dinâmica real de quadricóptero (resultados publicados em CBA 2026):
 
-**Controles** (3): `[τx, τy, τz]` (torques nos eixos do corpo)
+### Desempenho temporal
 
-A matriz A é dependente do estado atual (SDRE), recalculada a cada ciclo.
+| Método         | Média (μs)       | σ (μs)   | Pior caso (μs) | Falhas / 800k | Iterações (méd ± σ) | Iter. (pior) |
+|----------------|------------------|----------|----------------|---------------|---------------------|--------------|
+| SDA-SS         | **8 413,26**     | 541,55   | 10 902         | 55 349 (6,9 %) | 7,79 ± 0,52         | 10           |
+| **SDA (base)** | **8 663,59**     | **146,49** | **8 750**    | **0**          | 7,99 ± 0,13         | 8            |
+| SDA-Scaled     | 8 854,91         | 327,95   | 11 024         | 48 302 (6,0 %) | 8,08 ± 0,31         | 10           |
+| ASDA           | 9 114,64         | **24,64** | 9 180         | 0              | 8,00 ± 0,00         | 8            |
+| SDA-ADDA       | 10 754,63        | 556,55   | 13 654         | 40 314 (5,0 %) | 7,96 ± 0,42         | 10           |
+| Iterativo      | 11 912,00        | 2 868,74 | 16 884         | 0              | 22,49 ± 5,64        | 32           |
+| Van Dooren     | 39 281,13        | 3 637,45 | 126 877        | 0              | 1,00 ± 0,00         | 1            |
 
-## 📈 Simulações Python
+### Precisão (erro RMS dos ganhos K vs. método iterativo de referência)
+
+| Método         | Erro RMS                  |
+|----------------|---------------------------|
+| **SDA (base)** | **9,36 × 10⁻⁷**           |
+| ASDA           | 1,92 × 10⁻⁵               |
+| Van Dooren     | 5,53 × 10⁻⁵               |
+| SDA-ADDA       | 1,85 × 10⁻⁴               |
+| SDA-SS         | 3,22 × 10⁻⁴               |
+| SDA-Scaled     | 3,43 × 10⁻⁴               |
+| Iterativo      | — (referência)            |
+
+> **Recomendação:** **SDA (base)** — melhor balanço velocidade × precisão × robustez. Zero falhas em 800 k execuções, menor erro RMS (~10⁻⁷), pior caso a 8 750 μs cabe folgado no ciclo de controle a 80 Hz (12 500 μs).
+>
+> **ASDA** como alternativa quando previsibilidade temporal é crítica (σ de apenas 24,64 μs).
+>
+> **Evitar** SDA-SS, SDA-Scaled e SDA-ADDA em malha de tempo real: ~5–7 % de falha sob excitações estocásticas do voo. **Van Dooren** descartado por custo: ~4,5× mais lento que o SDA base.
+
+Detalhes, derivações e API em [`lib/AUTOLQR/README.md`](lib/AUTOLQR/README.md). Referências bibliográficas dos algoritmos em [`docs/REFERENCES.md`](docs/REFERENCES.md#2-solvers-dare-equação-algébrica-de-riccati-discreta).
+
+## Modelo do sistema
+
+**Estado** (6): $x = [\phi,\ \theta,\ \psi,\ p,\ q,\ r]^T$ — ângulos de Euler + taxas no corpo
+
+**Controle** (3): $u = [\tau_x,\ \tau_y,\ \tau_z]^T$ — torques nos eixos do corpo
+
+Dinâmica não-linear linearizada por SDRE:
+
+$$\dot{x} = A(x)\,x + B\,u$$
+
+com $A(x)$ recalculada a cada ciclo. `updateSystemMatrix()` em `main.cpp` monta $A_d, B_d, Q_d, R_d$ analiticamente (Taylor 2ª/3ª ordem) explorando a esparsidade do problema — ~14× mais rápido que multiplicação matricial genérica.
+
+Controle aplicado:
+
+$$u = -K\,x + K_r\,r,\quad K_r = -K[:,\,0\!:\!m]$$
+
+## Simulações Python
 
 ```bash
 cd python
 
-# Simulação do controle de atitude
-python atitude_sim.py
-
-# Comparação dos solvers
-python compara_solvers.py
-
-# Busca de parâmetros ótimos
-python matriz_otima/busca_parametros_otimos_sdre.py
+python atitude_sim.py                                # Simulação do controle de atitude
+python compara_solvers.py                            # Comparação dos solvers DARE
+python plot_telemetry.py outputs/telem.csv           # Plota CSV exportado pelo drone
+python matriz_otima/busca_parametros_otimos_sdre.py  # Busca Q,R ótimos
 ```
 
-## 🤝 Contribuições
+## Documentação
 
-Contribuições são bem-vindas! Por favor, abra uma issue para discussão antes de submeter PRs significativos.
+- [`docs/REFERENCES.md`](docs/REFERENCES.md) — **referências bibliográficas de todos os métodos**
+- [`lib/AUTOLQR/README.md`](lib/AUTOLQR/README.md) — solvers DARE, API, benchmarks
+- [`lib/KalmanFilter/README.md`](lib/KalmanFilter/README.md) — filtro de Kalman linear (opcional)
+- [`lib/PIDController/README.md`](lib/PIDController/README.md) — controlador PID alternativo
+- [`lib/WiFiComm/README.md`](lib/WiFiComm/README.md) — protocolo CRTP e ESP-Drone
+- [`docs/QUICK_TEST.md`](docs/QUICK_TEST.md) — teste rápido de conexão e controle
+- [`docs/MOTOR_CALIBRATION_GUIDE.md`](docs/MOTOR_CALIBRATION_GUIDE.md) — calibração de coeficiente de empuxo
+- [`docs/WIFI_INTEGRATION.md`](docs/WIFI_INTEGRATION.md) — setup do app ESP-Drone
+- [`docs/LED_BATTERY_GUIDE.md`](docs/LED_BATTERY_GUIDE.md) — indicadores LED e thresholds de bateria
 
-## 📞 Contato
+## Contribuições
 
-Para dúvidas ou sugestões, abra uma issue no repositório.
+Issues e PRs bem-vindos. Para PRs significativos, abra uma issue antes para discussão.
 
 ---
 
-*Desenvolvido para pesquisa em controle de VANTs - SDRE em tempo real para sistemas embarcados*
+*Pesquisa em controle adaptativo de VANTs — SDRE em tempo real para sistemas embarcados.*

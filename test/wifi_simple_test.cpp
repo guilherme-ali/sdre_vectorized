@@ -2,7 +2,7 @@
  * Exemplo simples de teste de conexão WiFi/UDP
  * 
  * Este exemplo mostra como usar a biblioteca WiFiComm
- * para receber comandos do aplicativo LiteWing
+ * para receber comandos do aplicativo ESP-Drone
  */
 
 #include <Arduino.h>

@@ -5,8 +5,8 @@
 #define STATE_SIZE 6
 #define CONTROL_SIZE 3
 
-// Declaração externa do controlador (definido na main.cpp)
-extern AutoLQR controller;
+// Declaração externa do controlador (definido em main.cpp)
+extern AutoLQR sdreController;
 
 // ============= FUNÇÕES DE INICIALIZAÇÃO =============
 
@@ -28,119 +28,101 @@ void start_IMU_MPU6050(Adafruit_MPU6050& mpu) {
     // Configuração do MPU6050
     mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
     mpu.setGyroRange(MPU6050_RANGE_1000_DEG);
-    // DLPF 44 Hz: compromisso entre anti-aliasing (Nyquist=25 Hz a 50 Hz loop)
-    // e atraso de fase (4.9 ms). 21 Hz adicionaria 8.5 ms (42% do periodo).
+    // DLPF 260 Hz (passa-banda mais larga, sem filtragem efetiva no MPU):
+    // o anti-aliasing eh feito pelo Butterworth digital no main (cutoff 80 Hz,
+    // loop a 200 Hz). Modos menores do DLPF interno adicionariam atraso de fase
+    // significativo dentro do periodo de 5 ms.
     mpu.setFilterBandwidth(MPU6050_BAND_260_HZ);
     mpu.setSampleRateDivisor(0);
-        
+
     delay(100); // Aguarda estabilização
 }
 
-void calibrate_MPU6050(Adafruit_MPU6050& mpu, float& accel_offset_x, float& accel_offset_y, float& accel_offset_z,
+void calibrate_MPU6050(Adafruit_MPU6050& mpu,
+                       float& accel_offset_x, float& accel_offset_y, float& accel_offset_z,
                        float& gyro_offset_x, float& gyro_offset_y, float& gyro_offset_z) {
     Serial.println("=========================================");
     Serial.println("Iniciando calibração do MPU6050...");
     Serial.println("IMPORTANTE: Deixe o sensor COMPLETAMENTE IMÓVEL!");
     Serial.println("=========================================");
-    
+
     const int numSamples = 1000; // Número de amostras para calibração
     float accel_sum_x = 0, accel_sum_y = 0, accel_sum_z = 0;
     float gyro_sum_x = 0, gyro_sum_y = 0, gyro_sum_z = 0;
-    
+
     // Aguarda 3 segundos antes de iniciar
-    for(int i = 3; i > 0; i--) {
+    for (int i = 3; i > 0; i--) {
         Serial.print("Iniciando em ");
         Serial.print(i);
         Serial.println(" segundos...");
         delay(1000);
     }
-    
+
     Serial.println("Coletando dados...");
-    
+
     for (int i = 0; i < numSamples; i++) {
         sensors_event_t a, g, temp;
         mpu.getEvent(&a, &g, &temp);
-        
+
         accel_sum_x += a.acceleration.x;
         accel_sum_y += a.acceleration.y;
         accel_sum_z += a.acceleration.z;
-        
+
         gyro_sum_x += g.gyro.x;
         gyro_sum_y += g.gyro.y;
         gyro_sum_z += g.gyro.z;
-        
+
         if (i % 100 == 0) {
             Serial.print("Progresso: ");
             Serial.print((i * 100) / numSamples);
             Serial.println("%");
         }
-        
+
         delay(2); // Pequeno delay entre leituras
     }
-    
+
     // Calcula as médias
     accel_offset_x = accel_sum_x / numSamples;
     accel_offset_y = accel_sum_y / numSamples;
-    accel_offset_z = (accel_sum_z / numSamples) - 9.81; // Subtrai gravidade (sensor está na horizontal, Z aponta para cima)
-    
+    accel_offset_z = (accel_sum_z / numSamples) - 9.81f; // Subtrai gravidade (sensor na horizontal, Z aponta para cima)
+
     gyro_offset_x = gyro_sum_x / numSamples;
     gyro_offset_y = gyro_sum_y / numSamples;
     gyro_offset_z = gyro_sum_z / numSamples;
-    
+
     Serial.println("=========================================");
     Serial.println("Calibração concluída!");
     Serial.println("Offsets calculados:");
     Serial.print("Accel X: "); Serial.print(accel_offset_x, 6); Serial.println(" m/s²");
     Serial.print("Accel Y: "); Serial.print(accel_offset_y, 6); Serial.println(" m/s²");
     Serial.print("Accel Z: "); Serial.print(accel_offset_z, 6); Serial.println(" m/s²");
-    Serial.print("Gyro X: "); Serial.print(gyro_offset_x, 6); Serial.println(" rad/s");
-    Serial.print("Gyro Y: "); Serial.print(gyro_offset_y, 6); Serial.println(" rad/s");
-    Serial.print("Gyro Z: "); Serial.print(gyro_offset_z, 6); Serial.println(" rad/s");
+    Serial.print("Gyro X: ");  Serial.print(gyro_offset_x, 6);  Serial.println(" rad/s");
+    Serial.print("Gyro Y: ");  Serial.print(gyro_offset_y, 6);  Serial.println(" rad/s");
+    Serial.print("Gyro Z: ");  Serial.print(gyro_offset_z, 6);  Serial.println(" rad/s");
     Serial.println("=========================================");
 }
 
-void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az, 
+void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az,
                   float& gx, float& gy, float& gz,
                   float accel_offset_x, float accel_offset_y, float accel_offset_z,
                   float gyro_offset_x, float gyro_offset_y, float gyro_offset_z) {
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
 
-    // Aplica os offsets de calibração e converte para as unidades corretas
-    ax = (a.acceleration.x - accel_offset_x) / 9.81; // m/s² para g
-    ay = (a.acceleration.y - accel_offset_y) / 9.81;
-    az = (a.acceleration.z - accel_offset_z) / 9.81; // REMOVI O SINAL NEGATIVO
+    // Aplica os offsets de calibração e converte para as unidades esperadas pelo Madgwick.
+    // Adafruit_MPU6050 retorna acel em m/s^2; o filtro espera g (sem normalizar magnitude).
+    ax = (a.acceleration.x - accel_offset_x) / 9.81f;
+    ay = (a.acceleration.y - accel_offset_y) / 9.81f;
+    az = (a.acceleration.z - accel_offset_z) / 9.81f;
 
-    gx = g.gyro.x - gyro_offset_x; // Já em rad/s
+    gx = g.gyro.x - gyro_offset_x; // já em rad/s
     gy = g.gyro.y - gyro_offset_y;
     gz = g.gyro.z - gyro_offset_z;
 }
 
-void start_BMP(Adafruit_BMP280& bmp) {
-    unsigned status_bmp = bmp.begin(0x76);
-    if (!status_bmp) {
-        Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
-                        "try a different address!"));
-        Serial.print("SensorID was: 0x"); Serial.println(bmp.sensorID(),16);
-        Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n");
-        Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
-        Serial.print("        ID of 0x60 represents a BME 280.\n");
-        Serial.print("        ID of 0x61 represents a BME 680.\n");
-        while (1) delay(10);
-    }
-
-    Serial.println("BMP280 inicializado com sucesso!");
-
-    bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
-                Adafruit_BMP280::SAMPLING_X2,
-                Adafruit_BMP280::SAMPLING_X16,
-                Adafruit_BMP280::FILTER_X16,
-                Adafruit_BMP280::STANDBY_MS_1);
-}
-
 // ============= FUNÇÕES DO QMC5883L (Magnetômetro) =============
-// Usa I2C1: SDA = GPIO40, SCL = GPIO41
-// Comunicação I2C direta para usar barramento alternativo
+// Compartilha o barramento I2C do MPU6050 (SDA=GPIO11, SCL=GPIO10, 400 kHz).
+// Implementacao bare-metal (sem lib externa) para nao acoplar a Adafruit_Sensor.
 
 #define QMC5883L_ADDR 0x0D
 
@@ -170,13 +152,13 @@ void setQMC5883LCalibration(float offset_x, float offset_y, float offset_z,
     _mag_scale_x = scale_x;
     _mag_scale_y = scale_y;
     _mag_scale_z = scale_z;
-    
+
     Serial.println("✅ Calibração do QMC5883L configurada:");
     Serial.printf("   Offsets: X=%.1f, Y=%.1f, Z=%.1f\n", offset_x, offset_y, offset_z);
     Serial.printf("   Escalas: X=%.4f, Y=%.4f, Z=%.4f\n", scale_x, scale_y, scale_z);
 }
 
-void _qmc_writeReg(uint8_t reg, uint8_t value) {
+static void _qmc_writeReg(uint8_t reg, uint8_t value) {
     _qmc_wire->beginTransmission(QMC5883L_ADDR);
     _qmc_wire->write(reg);
     _qmc_wire->write(value);
@@ -186,34 +168,34 @@ void _qmc_writeReg(uint8_t reg, uint8_t value) {
 void start_QMC5883L(TwoWire& wireInstance) {
     // Armazena referência ao barramento I2C
     _qmc_wire = &wireInstance;
-    
+
     // O MPU6050 já inicializou o Wire em `start_IMU_MPU6050`, então não
     // precisamos chamar `wireInstance.begin` nem `wireInstance.setClock` aqui
     // para evitar conflitos na configuração dos pinos que já foi feita (11 e 10).
-    
+
     // Verifica se o QMC5883L está presente
     _qmc_wire->beginTransmission(QMC5883L_ADDR);
     uint8_t error = _qmc_wire->endTransmission();
-    
+
     if (error != 0) {
         Serial.println("❌ ERRO: QMC5883L não encontrado no endereço 0x0D!");
         Serial.println("   Verifique as conexões do barramento I2C");
         return;
     }
-    
+
     // Soft Reset
     _qmc_writeReg(QMC5883L_REG_CONTROL2, 0x80);
     delay(10);
-    
+
     // Define período SET/RESET
     _qmc_writeReg(QMC5883L_REG_SET_RESET, 0x01);
-    
+
     // Configura o sensor:
     // Modo Contínuo (0x01), ODR 200Hz (0x0C), Range 8G (0x10), OSR 512 (0x00)
     _qmc_writeReg(QMC5883L_REG_CONTROL1, 0x01 | 0x0C | 0x10 | 0x00);
-    
+
     Serial.println("✅ QMC5883L inicializado com sucesso! (Mesmo barramento I2C do MPU)");
-    
+
     delay(100); // Aguarda estabilização
 }
 
@@ -222,30 +204,30 @@ void read_QMC5883L(float& mx, float& my, float& mz) {
         mx = my = mz = 0;
         return;
     }
-    
+
     // Lê 6 bytes de dados (X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB)
     _qmc_wire->beginTransmission(QMC5883L_ADDR);
     _qmc_wire->write(QMC5883L_REG_DATA);
     _qmc_wire->endTransmission();
-    
+
     _qmc_wire->requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6);
-    
+
     if (_qmc_wire->available() >= 6) {
         // No QMC5883L os dados são LSB primeiro e depois MSB!
         int16_t x_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
         int16_t y_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
         int16_t z_raw = _qmc_wire->read() | (_qmc_wire->read() << 8);
-        
+
         // Aplica calibração Hard-Iron (offset) e Soft-Iron (escala)
         float x_cal = (x_raw - _mag_offset_x) * _mag_scale_x;
         float y_cal = (y_raw - _mag_offset_y) * _mag_scale_y;
         float z_cal = (z_raw - _mag_offset_z) * _mag_scale_z;
-        
+
         // Converte para µT (microtesla)
         // Range 8G: sensibilidade = 3000 LSB/Gauss, 1 Gauss = 100 µT
         // Fator de conversão: valor_LSB / 3000 * 100 = valor_LSB / 30
         const float SCALE_FACTOR = 1.0f / 30.0f;
-        
+
         mx = x_cal * SCALE_FACTOR;
         my = y_cal * SCALE_FACTOR;
         mz = z_cal * SCALE_FACTOR;
@@ -256,7 +238,8 @@ void read_QMC5883L(float& mx, float& my, float& mz) {
 
 // ============= FUNÇÕES DE CÁLCULO DE CONTROLE =============
 
-void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff, float L_arm,
+void calculateMotorOmegaSq(float thrust_signal, float u_torques[],
+                           float b_coeff, float d_coeff, float L_arm,
                            float& w1_sq, float& w2_sq, float& w3_sq, float& w4_sq) {
     // Verifica se os coeficientes são válidos
     if (b_coeff == 0.0f || d_coeff == 0.0f || L_arm == 0.0f) {
@@ -266,18 +249,18 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
     }
 
     // Pré-calcula os inversos para otimização
-    // Thrust: T = 4*b*ω² → ω² = T/(4b)
+    // Thrust: T = 4*b*ω²       → ω² = T/(4b)
     // Torque roll/pitch: τ = 2*b*L*ω² → ω² = τ/(2bL)
-    // Torque yaw: τ = 4*d*ω² → ω² = τ/(4d)
-    float inv_4b = 1.0f / (4.0f * b_coeff);
-    float inv_2bL = 1.0f / (2.0f * b_coeff * L_arm);  // CORREÇÃO: inclui L_arm!
-    float inv_4d = 1.0f / (4.0f * d_coeff);
+    // Torque yaw: τ = 4*d*ω²     → ω² = τ/(4d)
+    float inv_4b  = 1.0f / (4.0f * b_coeff);
+    float inv_2bL = 1.0f / (2.0f * b_coeff * L_arm); // inclui L_arm (denominador do torque de roll/pitch)
+    float inv_4d  = 1.0f / (4.0f * d_coeff);
 
     // Extrai os sinais de controle
-    float u1 = thrust_signal;    // Empuxo total [N]
-    float u2 = u_torques[0];     // Torque de Rolagem (Roll) [N·m]
-    float u3 = u_torques[1];     // Torque de Arfagem (Pitch) [N·m]
-    float u4 = u_torques[2];     // Torque de Guinada (Yaw) [N·m]
+    float u1 = thrust_signal; // Empuxo total          [N]
+    float u2 = u_torques[0];  // Torque de Rolagem     [N·m]
+    float u3 = u_torques[1];  // Torque de Arfagem     [N·m]
+    float u4 = u_torques[2];  // Torque de Guinada     [N·m]
 
     // Relação direta (u = T*ω²):
     // [u1]   [  b     b     b     b ] [ω1²]
@@ -285,18 +268,17 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
     // [u3]   [  bL  -bL   -bL    bL ] [ω3²]
     // [u4]   [ -d     d    -d     d ] [ω4²]
     //
-    // Matriz de alocação de controle inversa (ω² = T^(-1)*u) (configuração X-quad):
+    // Matriz de alocação de controle inversa (ω² = T^(-1)*u), config X-quad.
     // Sinais da coluna de yaw invertidos para casar com o sentido fisico
     // (motores 2 e 4 CCW devem acelerar para u4 > 0).
     // [ω1²]   [1/(4b)  -1/(2bL)   1/(2bL)  -1/(4d)] [u1]
     // [ω2²] = [1/(4b)  -1/(2bL)  -1/(2bL)   1/(4d)] [u2]
     // [ω3²]   [1/(4b)   1/(2bL)  -1/(2bL)  -1/(4d)] [u3]
     // [ω4²]   [1/(4b)   1/(2bL)   1/(2bL)   1/(4d)] [u4]
-
-    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d;  // Motor 1 (FR, CW)
-    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d;  // Motor 2 (RR, CCW)
-    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d;  // Motor 3 (RL, CW)
-    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d;  // Motor 4 (FL, CCW)
+    w1_sq = u1 * inv_4b - u2 * inv_2bL + u3 * inv_2bL - u4 * inv_4d; // Motor 1 (FR, CW)
+    w2_sq = u1 * inv_4b - u2 * inv_2bL - u3 * inv_2bL + u4 * inv_4d; // Motor 2 (RR, CCW)
+    w3_sq = u1 * inv_4b + u2 * inv_2bL - u3 * inv_2bL - u4 * inv_4d; // Motor 3 (RL, CW)
+    w4_sq = u1 * inv_4b + u2 * inv_2bL + u3 * inv_2bL + u4 * inv_4d; // Motor 4 (FL, CCW)
 
     // Garante que não há valores negativos (motores não podem girar ao contrário)
     if (w1_sq < 0) w1_sq = 0;
@@ -307,12 +289,12 @@ void calculateMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff
 
 // ============= FUNÇÕES DE DISPLAY =============
 
-void displayGains(){
+void displayGains() {
     float exportedGains[CONTROL_SIZE * STATE_SIZE];
-    controller.exportGains(exportedGains);
+    sdreController.exportGains(exportedGains);
 
     float exportedKr[CONTROL_SIZE * CONTROL_SIZE];
-    controller.exportKr(exportedKr);
+    sdreController.exportKr(exportedKr);
     Serial.println("Ganhos do LQR calculados com sucesso");
 
     Serial.println("Ganhos Exportados (K):");
@@ -323,7 +305,7 @@ void displayGains(){
         }
         Serial.println();
     }
-    
+
     Serial.println("Matriz Kr (ganho de referência):");
     for (int i = 0; i < CONTROL_SIZE; i++) {
         for (int j = 0; j < CONTROL_SIZE; j++) {
@@ -334,7 +316,7 @@ void displayGains(){
     }
 }
 
-void displayIMU(float ax, float ay, float az, float gx, float gy, float gz, 
+void displayIMU(float ax, float ay, float az, float gx, float gy, float gz,
                 float mx, float my, float mz, float temp) {
     Serial.print(ax, 6);
     Serial.print("\t");
@@ -357,36 +339,26 @@ void displayIMU(float ax, float ay, float az, float gx, float gy, float gz,
     Serial.println(temp, 6);
 }
 
-void displayBMP(Adafruit_BMP280& bmp) {
-    float temperature = bmp.readTemperature();
-    float pressure = bmp.readPressure();
-    float altitude = bmp.readAltitude(1013.25);
-    
-    Serial.print("Temp_BMP:"); Serial.print(temperature);
-    Serial.print("°C,Press:"); Serial.print(pressure/100.0);
-    Serial.print("hPa,Alt:"); Serial.print(altitude);
-    Serial.println("m");
-}
-
-void displayStates(float states[]) { 
-    Serial.print("Roll:"); Serial.print(states[0]);
+void displayStates(float states[]) {
+    Serial.print("Roll:");   Serial.print(states[0]);
     Serial.print(",Pitch:"); Serial.print(states[1]);
-    Serial.print(",Yaw:"); Serial.print(states[2]);
-    Serial.print(",p:"); Serial.print(states[3]);
-    Serial.print(",q:"); Serial.print(states[4]);
-    Serial.print(",r:"); Serial.println(states[5]);
+    Serial.print(",Yaw:");   Serial.print(states[2]);
+    Serial.print(",p:");     Serial.print(states[3]);
+    Serial.print(",q:");     Serial.print(states[4]);
+    Serial.print(",r:");     Serial.println(states[5]);
 }
 
 void displayControlSignals(float u_signal[], float thrust_signal) {
-    Serial.print("u1:"); Serial.print(u_signal[0], 6);
+    Serial.print("u1:");  Serial.print(u_signal[0], 6);
     Serial.print(",u2:"); Serial.print(u_signal[1], 6);
     Serial.print(",u3:"); Serial.print(u_signal[2], 8); // u3 costuma ser extremamente pequeno por causa do Yaw
-    Serial.print(",T:"); Serial.println(thrust_signal, 4);
+    Serial.print(",T:");  Serial.println(thrust_signal, 4);
 }
 
-void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, float d_coeff, float L_arm) {
+void displayMotorOmegaSq(float thrust_signal, float u_torques[],
+                         float b_coeff, float d_coeff, float L_arm) {
     float w1_sq, w2_sq, w3_sq, w4_sq;
-    
+
     // Usa a função de cálculo
     calculateMotorOmegaSq(thrust_signal, u_torques, b_coeff, d_coeff, L_arm,
                           w1_sq, w2_sq, w3_sq, w4_sq);
@@ -395,7 +367,7 @@ void displayMotorOmegaSq(float thrust_signal, float u_torques[], float b_coeff, 
 }
 
 void displayMotorOmegaSqDetailed(float w1_sq, float w2_sq, float w3_sq, float w4_sq) {
-    Serial.print("GPIO3(ω²): "); Serial.print(w1_sq, 2);
+    Serial.print("GPIO3(ω²): ");    Serial.print(w1_sq, 2);
     Serial.print(" | GPIO4(ω²): "); Serial.print(w2_sq, 2);
     Serial.print(" | GPIO5(ω²): "); Serial.print(w3_sq, 2);
     Serial.print(" | GPIO6(ω²): "); Serial.println(w4_sq, 2);

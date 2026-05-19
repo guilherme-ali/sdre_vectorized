@@ -1,6 +1,6 @@
 # WiFiComm - Biblioteca de Comunicação WiFi/UDP
 
-Esta biblioteca implementa comunicação WiFi/UDP compatível com o protocolo **Crazyflie** usado pelo aplicativo **LiteWing**.
+Esta biblioteca implementa comunicação WiFi/UDP compatível com o protocolo **Crazyflie** usado pelo aplicativo **ESP-Drone**.
 
 ## 📋 Características
 
@@ -57,7 +57,7 @@ void loop() {
 Por padrão, a biblioteca usa:
 - **SSID**: ESP-DRONE
 - **Senha**: 12345678
-- **IP**: 192.168.43.42 (padrão LiteWing)
+- **IP**: 192.168.43.42 (padrão ESP-Drone)
 - **Porta UDP**: 2390 (padrão Crazyflie)
 
 ### Personalizar IP
@@ -136,10 +136,10 @@ wifiComm.enableDebug(true);
 wifiComm.enableVerbose(true);
 ```
 
-## 📱 Como Conectar o App LiteWing
+## 📱 Como Conectar o App ESP-Drone
 
 1. Conecte o smartphone ao WiFi **ESP-DRONE** (senha: **12345678**)
-2. Abra o aplicativo LiteWing
+2. Abra o aplicativo ESP-Drone
 3. Clique no botão **LINK** (ícone de conexão)
 4. O drone deve conectar automaticamente
 5. Use os joysticks para controlar o drone

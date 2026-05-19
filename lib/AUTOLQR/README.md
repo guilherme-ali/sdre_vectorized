@@ -4,37 +4,51 @@ Biblioteca otimizada para cálculo de ganhos LQR em tempo real, projetada para s
 
 ## 📋 Características
 
-- **7 métodos de solução DARE** implementados
-- **Operações matriciais otimizadas** para sistemas de pequeno/médio porte
-- **Filtro de Kalman** removido em favor do uso do **Filtro Madgwick** (via biblioteca externa) para estimação de orientação
-- **Warm-start** para métodos iterativos
-- **Baixo consumo de memória** com alocação dinâmica controlada
+- **7 métodos de solução DARE** implementados (SDA, SDA-ss, ASDA, SDA Scaled, ADDA, Van Dooren, Iterativo)
+- **Operações matriciais otimizadas** para sistemas de pequeno/médio porte (`MatrixOperations`)
+- **Warm-start** automático para o método iterativo (P anterior como inicial)
+- **Baixo consumo de memória** — alocação única no construtor, sem `new` em runtime
 
 ## 🔧 Métodos Disponíveis
 
-### Comparação de Performance (ESP32 @ 240MHz)
+### Comparação de Performance (ESP32-S2 @ 240MHz)
 
-Sistema de teste: **6 estados × 3 controles**, 100 iterações
+Sistema de teste: **6 estados × 3 controles**, **800 000 execuções** sob dinâmica real de quadricóptero (CBA 2026).
 
-| Método | Identificador | Tempo Médio (μs) | σ (μs) | σ da Média | Erro RMS |
-|--------|---------------|------------------|--------|------------|----------|
-| **SDA** | `"SDA"` | 8303.78 | 12.12 | 1.2117 | 4.99e-05 |
-| **SDA Single-Shift** | `"SDA_SS"` | 8503.93 | 12.91 | 1.2913 | 4.98e-05 |
-| **ASDA (Adaptativo)** | `"ASDA"` | 9020.53 | 11.46 | 1.1462 | 1.69e-05 |
-| **SDA Scaled** | `"SDA_SCALED"` | 8666.85 | 12.05 | 1.2054 | 4.69e-05 |
-| **ADDA** | `"ADDA"` | 8277.27 | 13.36 | 1.3356 | 4.99e-05 |
-| **Van Dooren** | `"VAN_DOOREN"` | 41915.83 | 5825.84 | 582.58 | 4.05e-05 |
-| **Iterativo** | `"ITERATIVE"` | 13333.36 | 2125.54 | 212.55 | Referência |
+#### Tempo de execução
+
+| Método | Identificador | Média (μs) | σ (μs) | Pior caso (μs) | Falhas / 800k | Iter. (méd ± σ) | Iter. (pior) |
+|--------|---------------|------------|--------|----------------|---------------|------------------|--------------|
+| **SDA (base)** | `"SDA"` | **8663,59** | **146,49** | **8750** | **0** | 7,99 ± 0,13 | 8 |
+| SDA Single-Shift | `"SDA_SS"` | 8413,26 | 541,55 | 10902 | 55 349 | 7,79 ± 0,52 | 10 |
+| ASDA (Adaptativo) | `"ASDA"` | 9114,64 | **24,64** | 9180 | 0 | 8,00 ± 0,00 | 8 |
+| SDA Scaled | `"SDA_SCALED"` | 8854,91 | 327,95 | 11024 | 48 302 | 8,08 ± 0,31 | 10 |
+| SDA-ADDA | `"ADDA"` | 10754,63 | 556,55 | 13654 | 40 314 | 7,96 ± 0,42 | 10 |
+| Van Dooren | `"VAN_DOOREN"` | 39281,13 | 3637,45 | 126877 | 0 | 1,00 ± 0,00 | 1 |
+| Iterativo | `"ITERATIVE"` | 11912,00 | 2868,74 | 16884 | 0 | 22,49 ± 5,64 | 32 |
+
+#### Precisão (erro RMS dos ganhos K vs. método iterativo)
+
+| Método | Erro RMS |
+|--------|----------|
+| **SDA (base)** | **9,36 × 10⁻⁷** |
+| ASDA | 1,92 × 10⁻⁵ |
+| Van Dooren | 5,53 × 10⁻⁵ |
+| SDA-ADDA | 1,85 × 10⁻⁴ |
+| SDA-SS | 3,22 × 10⁻⁴ |
+| SDA-Scaled | 3,43 × 10⁻⁴ |
+| Iterativo | — (referência) |
 
 ### Descrição dos Métodos
 
-#### 1. SDA (Structure-preserving Doubling Algorithm)
+#### 1. SDA (Structure-preserving Doubling Algorithm) ⭐ **RECOMENDADO**
 ```cpp
 lqr.computeGains("SDA");
 ```
-- **Melhor para**: Uso geral em tempo real
+- **Melhor para**: Uso geral em tempo real — **escolha padrão para o projeto**
 - **Características**: Convergência quadrática, preserva estrutura simpléctica
-- **Complexidade**: O(n³) por iteração, ~15-20 iterações típicas
+- **Complexidade**: O(n³) por iteração, ~8 iterações em regime
+- **Robustez comprovada**: 0 falhas em 800 000 execuções; menor erro RMS (9,36×10⁻⁷)
 
 #### 2. SDA-ss (SDA com Single Shift)
 ```cpp
@@ -64,9 +78,8 @@ lqr.computeGains("SDA_SCALED");
 ```cpp
 lqr.computeGains("ADDA");
 ```
-- **Melhor para**: Melhor velocidade com boa precisão ⭐ **RECOMENDADO**
 - **Características**: Usa duas matrizes auxiliares V e W simétricas
-- **Vantagem**: Mais rápido que SDA padrão
+- **⚠️ Atenção**: ~5 % de taxa de falha sob excitações estocásticas do voo (40 314 / 800 k testes). Apenas para sistemas bem-condicionados e suaves.
 
 #### 6. Van Dooren (Extended Symplectic Pencil)
 ```cpp
@@ -135,8 +148,8 @@ void loop() {
     lqr.setStateMatrix(Ad);   // Matriz de estados discretizada
     lqr.setInputMatrix(Bd);   // Matriz de entrada discretizada
     
-    // 3. Calcular ganhos (escolher método)
-    lqr.computeGains("ADDA");
+    // 3. Calcular ganhos (SDA base = padrão do projeto)
+    lqr.computeGains("SDA");
     
     // 4. Calcular ação de controle
     lqr.updateState(current_state);
@@ -199,23 +212,23 @@ public:
 
 ## ⚙️ Recomendações de Uso
 
-### Para Controle em Tempo Real (< 10ms ciclo)
+### Para controle em tempo real (escolha padrão do projeto)
 ```cpp
-// Usar ADDA - melhor velocidade com precisão adequada
-lqr.computeGains("ADDA");
+// SDA base: 0 falhas em 800k execuções, pior caso 8750 us, erro RMS 9.36e-7
+lqr.computeGains("SDA");
 ```
 
-### Para Máxima Precisão
+### Quando previsibilidade temporal é crítica (jitter mínimo)
 ```cpp
-// Usar ITERATIVE com warm-start
-// A matriz P da iteração anterior é mantida automaticamente
+// ASDA: desvio padrão de apenas 24.64 us (vs 146.49 us do SDA base)
+lqr.computeGains("ASDA");
+```
+
+### Para validação offline / referência de precisão
+```cpp
+// Iterativo com warm-start: alta precisão, lento e jitter alto.
+// NÃO recomendado em malha de tempo real.
 lqr.computeGains("ITERATIVE");
-```
-
-### Para Sistemas Mal-Condicionados
-```cpp
-// Usar SDA_SCALED ou ASDA
-lqr.computeGains("SDA_SCALED");
 ```
 
 ## 🔬 Detalhes de Implementação
@@ -238,10 +251,9 @@ onde $K_r$ é o ganho de referência para tracking.
 
 ```
 AUTOLQR/
-├── AutoLQR.cpp          # Implementação principal
-├── AutoLQR.h            # Interface da classe
-├── MatrixOperations.cpp/h # Operações matriciais
-└── README.md            # Esta documentação
+├── AutoLQR.cpp / .h            # Classe principal (estende MatrixOperations)
+├── MatrixOperations.cpp / .h   # Operações lineares (inv, mul, transp, QR, etc.)
+└── README.md                   # Esta documentação
 ```
 
 ## 📚 Referências

@@ -18,7 +18,7 @@ lib/
 
 **Características principais:**
 - ✅ Protocolo CRTP (Crazyflie Real-Time Protocol) completo
-- ✅ Compatível com app LiteWing
+- ✅ Compatível com app ESP-Drone
 - ✅ Sistema de callbacks para eventos
 - ✅ Modos debug e verbose
 - ✅ Detecção automática de conexão/desconexão
@@ -87,8 +87,8 @@ No smartphone:
 2. Conecte na rede **ESP-DRONE**
 3. Senha: **12345678**
 
-### Passo 3: Abrir app LiteWing
-1. Abra o aplicativo LiteWing
+### Passo 3: Abrir app ESP-Drone
+1. Abra o aplicativo ESP-Drone
 2. Clique no botão **LINK** (ícone de conexão)
 3. Aguarde conexão automática
 4. Use os joysticks para controlar
@@ -100,7 +100,7 @@ O Serial Monitor mostrará:
    IP: 192.168.43.42
    Porta UDP: 2390
 
-⏳ Aguardando conexão do LiteWing app...
+⏳ Aguardando conexão do ESP-Drone app...
 
 📱 Cliente WiFi conectado!
    Aguardando pacotes UDP do app...
@@ -177,7 +177,7 @@ Para testar apenas a conexão WiFi sem o resto do sistema:
 
 ```
 ┌─────────────┐           ┌─────────────┐           ┌─────────────┐
-│  LiteWing   │  WiFi/UDP │   ESP32     │  Process  │  Controle   │
+│  ESP-Drone   │  WiFi/UDP │   ESP32     │  Process  │  Controle   │
 │     App     │──────────▶│  WiFiComm   │──────────▶│   SDRE      │
 └─────────────┘           └─────────────┘           └─────────────┘
      │                           │                         │
@@ -217,7 +217,7 @@ Para testar apenas a conexão WiFi sem o resto do sistema:
 ## 📝 Próximos Passos
 
 1. ✅ Sistema de comunicação WiFi implementado
-2. ⏳ Testar comunicação com app LiteWing
+2. ⏳ Testar comunicação com app ESP-Drone
 3. ⏳ Calibrar conversão de comandos para setpoints
 4. ⏳ Implementar failsafe avançado
 5. ⏳ Adicionar telemetria de volta (enviar dados para app)
@@ -225,5 +225,5 @@ Para testar apenas a conexão WiFi sem o resto do sistema:
 ## 📚 Referências
 
 - [Protocolo CRTP - Crazyflie](https://www.bitcraze.io/documentation/repository/crazyflie-firmware/master/functional-areas/crtp/)
-- [LiteWing App](https://play.google.com/store/apps/details?id=com.litewing)
+- [ESP-Drone (Espressif)](https://github.com/espressif/esp-drone) — firmware oficial e aplicativo móvel
 - Código base: `testa_conexao_wifi.ino`

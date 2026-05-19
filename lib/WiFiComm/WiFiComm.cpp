@@ -22,7 +22,7 @@ WiFiComm::WiFiComm(const char* ssid, const char* password, int udpPort)
       _debugEnabled(false),
       _verboseEnabled(false)
 {
-    // IP padrão do LiteWing
+    // IP padrão do app ESP-Drone
     _local_IP = IPAddress(192, 168, 43, 42);
     _gateway = IPAddress(192, 168, 43, 1);
     _subnet = IPAddress(255, 255, 255, 0);
@@ -43,7 +43,7 @@ void WiFiComm::setIP(IPAddress local, IPAddress gateway, IPAddress subnet) {
 bool WiFiComm::begin() {
     if (_debugEnabled) {
         Serial.println("\n╔════════════════════════════════════╗");
-        Serial.println("║  ESP32 DRONE - LiteWing Compatible ║");
+        Serial.println("║  ESP32 DRONE - ESP-Drone App       ║");
         Serial.println("╚════════════════════════════════════╝\n");
         Serial.println("📡 Configurando WiFi Access Point...");
         Serial.print("   SSID: ");
@@ -91,11 +91,11 @@ bool WiFiComm::begin() {
         Serial.print(_password);
         for (int i = strlen(_password); i < 25; i++) Serial.print(" ");
         Serial.println("║");
-        Serial.println("║ 3. Abra o app LiteWing             ║");
+        Serial.println("║ 3. Abra o app ESP-Drone            ║");
         Serial.println("║ 4. Clique no botão LINK (conectar) ║");
         Serial.println("║ 5. O drone deve conectar auto!     ║");
         Serial.println("╚════════════════════════════════════╝\n");
-        Serial.println("⏳ Aguardando conexão do LiteWing app...\n");
+        Serial.println("⏳ Aguardando conexão do app ESP-Drone...\n");
     }
     
     return true;

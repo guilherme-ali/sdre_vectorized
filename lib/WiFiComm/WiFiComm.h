@@ -2,7 +2,7 @@
  * WiFiComm.h
  * 
  * Biblioteca para comunicação WiFi/UDP com protocolo Crazyflie
- * Compatível com LiteWing app
+ * Compatível com o app ESP-Drone (Espressif)
  */
 
 #ifndef WIFICOMM_H
