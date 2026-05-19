@@ -7,14 +7,31 @@ import matplotlib.animation as animation
 # 1. PARÂMETROS DO DRONE E LIMITES FÍSICOS
 # ==========================================
 Ixx = 16.57e-6
-Iyy = 16.57e-6
+Iyy = 13.57e-6
 Izz = 29.80e-6
 Ir = 1.02e-7
 m = 0.0469  # 46.9g
 g = 9.80665
-dt_sim = 0.02  # Simulação base (100Hz)
-dt_sdre = 0.02  # SDRE a 50Hz
-dt_pid = 0.05  # PID a 10Hz
+dt_control = 0.005  # Loop de controle (200Hz) — equivale ao SAMPLING_TIME_S do main.cpp
+dt_sdre = 0.024  # Recálculo SDRE (~41.7Hz) — emula task assíncrona (~24ms no ESP32)
+dt_pid = 0.05  # PID de posição (10Hz)
+SENSOR_DELAY_S = 0.0015  # Atraso de leitura do sensor em segundos (configurável)
+
+# ==========================================
+# MODO DE SIMULAÇÃO
+# 1 = Assíncrono  : controle a 200Hz (5ms), SDRE a ~41Hz (24ms)  — emula main.cpp
+# 2 = Síncrono    : pipeline sequencial por ciclo:
+#       sensor (1ms) + filtro (1ms) + SDRE (10ms) + controle (0.5ms) = ~12.5ms/ciclo
+#       estado usado no controle tem PIPELINE_STATE_DELAY_S de atraso
+# 0 = Ambos       : roda os dois e gera gráfico de comparação
+# 3 = Estudo Async: compara 3 controladores (SDRE sync / SDRE async / LQR fixo)
+#                   em manobra agressiva, mede quanto async preserva o SDRE
+# ==========================================
+SIM_MODE = 1
+
+# Modo 2 — atraso de estado entre estimativa disponível e aplicação do controle
+PIPELINE_STATE_DELAY_S = 0.010  # 10ms (configurável)
+DT_SYNC_CYCLE = 0.0125  # duração total do ciclo síncrono (sensor+filtro+SDRE+apply)
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
 b_coeff = 2.94e-8  # Coeficiente de Empuxo
@@ -79,13 +96,13 @@ M_mixer_real = np.array(
 # pois cria componente lateral no corpo que o Madgwick usa como cue de inclinação.
 K_DRAG_TRANS = 0.01  # N·s/m
 
-# Matrizes de Peso do SDRE (Q e R)
-roll_max_rad = 10.0 * np.pi / 180.0
-pitch_max_rad = 10.0 * np.pi / 180.0
-yaw_max_rad = 30.0 * np.pi / 180.0
-p_max = 90.0 * np.pi / 180.0
-q_max = 90.0 * np.pi / 180.0
-r_max = 180.0 * np.pi / 180.0
+# Matrizes de Peso do SDRE (Q e R) — IDÊNTICOS ao main.cpp linhas 143-148
+roll_max_rad = 45.0 * np.pi / 180.0  # main.cpp: roll_max_rad = 45° DEG_TO_RAD
+pitch_max_rad = 45.0 * np.pi / 180.0  # main.cpp: pitch_max_rad = 45° DEG_TO_RAD
+yaw_max_rad = 90.0 * np.pi / 180.0  # main.cpp: yaw_max_rad = 90° DEG_TO_RAD
+p_max = 100.0 * np.pi / 180.0  # main.cpp: p_max = 100°/s
+q_max = 100.0 * np.pi / 180.0  # main.cpp: q_max = 100°/s
+r_max = 200.0 * np.pi / 180.0  # main.cpp: r_max = 200°/s
 
 Q = np.diag(
     [
@@ -354,8 +371,8 @@ def get_sdre_matrices(roll, pitch, yaw, p, q, r, omega_r=0.0):
     B[5, 2] = 1.0 / Izz
 
     A2 = A @ A
-    Ad = np.eye(6) + A * dt_sdre + A2 * (dt_sdre**2 * 0.5)
-    Bd = B * dt_sdre + (A @ B) * (dt_sdre**2 * 0.5)
+    Ad = np.eye(6) + A * dt_control + A2 * (dt_control**2 * 0.5)
+    Bd = B * dt_control + (A @ B) * (dt_control**2 * 0.5)
 
     return Ad, Bd
 
@@ -375,24 +392,20 @@ def get_rotation_matrix(phi, theta, psi):
 # 3. SIMULAÇÃO DO SISTEMA (com sensores + Madgwick)
 # ==========================================
 def simulate():
+    from collections import deque
+
     time_sim = 20.0
-    steps = int(time_sim / dt_sim)
+    steps = int(time_sim / dt_control)
     state = np.zeros(12)
 
     u_max = b_coeff * MAX_OMEGA_SQ * 4
     erro_max = 0.5
     kp_z = (u_max - g * m) / (erro_max * m)
-
-    # kd >= 2*sqrt(kp) para garantir amortecimento crítico ou superamortecido
     kd_z = 2 * np.sqrt(kp_z)
 
-    pid_vx = PIDController(kp=2.0, ki=3.1, kd=1.5, dt=dt_pid, limit=15.0)
-    pid_vy = PIDController(kp=2.0, ki=3.1, kd=1.5, dt=dt_pid, limit=15.0)
+    pid_vx = PIDController(kp=0.0, ki=0.0, kd=0.0, dt=dt_pid, limit=15.0)
+    pid_vy = PIDController(kp=0.0, ki=0.0, kd=0.0, dt=dt_pid, limit=15.0)
     pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt_pid, limit=15.0)
-
-    pid_vx = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
-    pid_vy = PIDController(kp=0.0, ki=0.0, kd=0 * 1.5, dt=dt_pid, limit=15.0)
-    # pid_z = PIDController(kp=0, ki=0, kd=0, dt=dt_pid, limit=15.0)
 
     history = {
         "t": [],
@@ -426,18 +439,25 @@ def simulate():
         "mz_meas": [],
     }
 
-    K_prev = np.zeros((3, 6))
+    # Ganho K compartilhado (atualizado periodicamente pela "task" SDRE assíncrona)
+    K_sdre = np.zeros((3, 6))
+    sdre_time_acc = dt_sdre  # Força recálculo imediato no primeiro step
 
     phi_ref, theta_ref = 0.0, 0.0
     T_ideal = m * g
     tau_ideal = np.zeros(3)
 
-    # Estado do filtro Madgwick (quaternion identidade) e aceleração CG anterior
     quat = np.array([1.0, 0.0, 0.0, 0.0])
     a_cg_world_prev = np.array([0.0, 0.0, 0.0])
 
+    # Buffer de atraso do sensor com interpolação linear para atraso fracionário
+    delay_steps_f = SENSOR_DELAY_S / dt_control
+    buf_len = max(int(np.ceil(delay_steps_f)) + 2, 2)
+    _zero = (np.zeros(3), np.zeros(3), np.zeros(3))
+    sensor_buf = deque([_zero] * buf_len, maxlen=buf_len)
+
     for step in range(steps):
-        t = step * dt_sim
+        t = step * dt_control
         vx, vy, vz = state[3], state[4], state[5]
         phi_t, theta_t, psi_t = state[6], state[7], state[8]
         p_t, q_t, r_t = state[9], state[10], state[11]
@@ -452,18 +472,33 @@ def simulate():
 
         flag_rajada = False
         if (2.0 <= t <= 3.5) and flag_rajada:
-            # Aumentei um pouco a rajada para forçar os motores a baterem no teto de 31k
             w_x += np.random.normal(0.3, 0.1)
             w_y += np.random.normal(-0.2, 0.1)
             w_z += np.random.normal(-0.05, 0.05)
 
         # ====================================================
-        # SENSORES + FILTRO MADGWICK (executa a cada passo, 100Hz)
+        # SENSORES: leitura instantânea + buffer de atraso de fase
         # ====================================================
         R_true = get_rotation_matrix(phi_t, theta_t, psi_t)
-        accel_meas, gyro_meas, mag_meas = simulate_sensors(
-            state, a_cg_world_prev, R_true
-        )
+        accel_raw, gyro_raw, mag_raw = simulate_sensors(state, a_cg_world_prev, R_true)
+
+        # Empurra leitura atual no buffer circular
+        sensor_buf.append((accel_raw, gyro_raw, mag_raw))
+
+        # Extrai com atraso SENSOR_DELAY_S via interpolação linear entre amostras
+        idx_int = int(delay_steps_f)
+        idx_frac = delay_steps_f - idx_int
+        n = len(sensor_buf)
+        i0 = min(idx_int, n - 1)
+        i1 = min(idx_int + 1, n - 1)
+        s0 = sensor_buf[n - 1 - i0]
+        s1 = sensor_buf[n - 1 - i1]
+        accel_meas = (1.0 - idx_frac) * s0[0] + idx_frac * s1[0]
+        gyro_meas = (1.0 - idx_frac) * s0[1] + idx_frac * s1[1]
+        mag_meas = (1.0 - idx_frac) * s0[2] + idx_frac * s1[2]
+        # ====================================================
+
+        # MADGWICK — atualiza a cada passo (200Hz)
         quat = madgwick_marg_update(
             quat,
             gyro_meas[0],
@@ -476,15 +511,14 @@ def simulate():
             mag_meas[1],
             mag_meas[2],
             MADGWICK_BETA,
-            dt_sim,
+            dt_control,
         )
         phi_est, theta_est, psi_est = quat_to_euler(quat)
         # Taxas estimadas vêm direto do giroscópio (Madgwick não estima bias do giro)
         p_est, q_est, r_est = gyro_meas[0], gyro_meas[1], gyro_meas[2]
-        # ====================================================
 
-        # PID -> Referências Ideais (10Hz)
-        if step % int(round(dt_pid / dt_sim)) == 0:
+        # PID DE POSIÇÃO — atualiza a cada dt_pid (10Hz)
+        if step % int(round(dt_pid / dt_control)) == 0:
             ux = pid_vx.update(Vx_ref - vx)
             uy = pid_vy.update(Vy_ref - vy)
             uz = pid_z.update(Z_ref - z)
@@ -492,49 +526,43 @@ def simulate():
             theta_ref = np.arctan2(ux, uz + g)
             phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
 
-            # Injeção de referência de Roll (10s a 11s: 10°, 15s a 16s: -10°)
-            if 5.0 <= t <= 6.0:
+            # Injeção de referência de Roll
+            if 5.0 <= t <= 8.0:
                 phi_ref = 10.0 * np.pi / 180.0
-            elif 8.0 <= t <= 9.0:
+            elif 10.0 <= t <= 13.0:
                 phi_ref = -10.0 * np.pi / 180.0
 
             T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
 
-        # SDRE -> Torques Ideais (50Hz) — usa estado ESTIMADO
-        if step % int(round(dt_sdre / dt_sim)) == 0:
+        # SDRE — recálculo a cada dt_sdre (≈24ms), emulando task assíncrona do main.cpp
+        sdre_time_acc += dt_control
+        if sdre_time_acc >= dt_sdre:
+            sdre_time_acc -= dt_sdre
             Ad, Bd = get_sdre_matrices(phi_est, theta_est, psi_est, p_est, q_est, r_est)
             try:
                 P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
-                K = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
-                K_prev = K
-            except np.linalg.LinAlgError:
-                K = K_prev
+                K_sdre = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+            except (np.linalg.LinAlgError, ValueError):
+                pass  # DARE pode falhar em estado muito ill-conditioned — mantém K anterior  # Mantém K_sdre anterior
 
-            x_att = np.array([phi_est, theta_est, psi_est, p_est, q_est, r_est])
-            x_ref = np.array([phi_ref, theta_ref, 0.0, 0, 0, 0])
-            tau_ideal = -K @ (x_att - x_ref)
+        # CONTROLE DE ATITUDE — u = -K*(x - x_ref), executa a cada passo (200Hz)
+        x_att = np.array([phi_est, theta_est, psi_est, p_est, q_est, r_est])
+        x_ref = np.array([phi_ref, theta_ref, 0.0, 0.0, 0.0, 0.0])
+        tau_ideal = -K_sdre @ (x_att - x_ref)
 
         # ========================================================
-        # O "CLAMP" - LIMITANDO RPM E EXTRAINDO AS FORÇAS REAIS
+        # MIXER + SATURAÇÃO DE RPM
         # ========================================================
         efforts_ideal = np.array([T_ideal, tau_ideal[0], tau_ideal[1], tau_ideal[2]])
-
-        # Converte para omega quadrado ideal
         omega_sq_ideal = M_inv @ efforts_ideal
-
-        # Satura as velocidades dos motores: mínimo 0, máximo MAX_OMEGA_SQ (31086 RPM)
         omega_sq_real = np.clip(omega_sq_ideal, 0.0, MAX_OMEGA_SQ)
-
-        # Converte de volta para RPM apenas para plotagem
         rpms = np.sqrt(omega_sq_real) * (60.0 / (2 * np.pi))
-
-        # Recalcula as forças REAIS que o drone conseguiu gerar (Motor Saturation)
         efforts_real = M_mixer_real @ omega_sq_real
         T_real = efforts_real[0]
         tau_real = efforts_real[1:4]
         # ========================================================
 
-        # Dinâmica Translacional + Vento + Arrasto (Usando T_real e estado verdadeiro)
+        # Dinâmica Translacional + Vento + Arrasto
         drag_accel = (-K_DRAG_TRANS / m) * np.array([vx, vy, vz])
         a_cg_world = np.array(
             [
@@ -549,7 +577,7 @@ def simulate():
         dvx, dvy, dvz = a_cg_world
         a_cg_world_prev = a_cg_world
 
-        # Dinâmica Rotacional (Usando tau_real)
+        # Dinâmica Rotacional
         dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q_t * r_t
         dq = tau_real[1] / Iyy + ((Izz - Ixx) / Iyy) * p_t * r_t
         dr = tau_real[2] / Izz + ((Ixx - Iyy) / Izz) * p_t * q_t
@@ -564,19 +592,19 @@ def simulate():
             theta_t
         )
 
-        # Integração
-        state[0] += state[3] * dt_sim
-        state[1] += state[4] * dt_sim
-        state[2] += state[5] * dt_sim
-        state[3] += dvx * dt_sim
-        state[4] += dvy * dt_sim
-        state[5] += dvz * dt_sim
-        state[6] += dphi * dt_sim
-        state[7] += dtheta * dt_sim
-        state[8] += dpsi * dt_sim
-        state[9] += dp * dt_sim
-        state[10] += dq * dt_sim
-        state[11] += dr * dt_sim
+        # Integração de Euler com dt_control (5ms)
+        state[0] += state[3] * dt_control
+        state[1] += state[4] * dt_control
+        state[2] += state[5] * dt_control
+        state[3] += dvx * dt_control
+        state[4] += dvy * dt_control
+        state[5] += dvz * dt_control
+        state[6] += dphi * dt_control
+        state[7] += dtheta * dt_control
+        state[8] += dpsi * dt_control
+        state[9] += dp * dt_control
+        state[10] += dq * dt_control
+        state[11] += dr * dt_control
 
         # Histórico
         history["t"].append(t)
@@ -612,7 +640,699 @@ def simulate():
     return history
 
 
-history = simulate()
+def simulate_sync_pipeline():
+    """Modo 2: controle síncrono com atraso de pipeline.
+
+    Pipeline por ciclo de controle:
+      sensor (1ms) + filtro/Madgwick (1ms) + SDRE (10ms) + aplicação (0.5ms) = ~12.5ms
+    O estado usado tanto no SDRE quanto em u = -K*x tem PIPELINE_STATE_DELAY_S de atraso,
+    representando que o estado foi estimado 10ms antes do controle ser aplicado.
+    Física integra com dt_control=5ms para comparação justa com o Modo 1.
+    """
+    from collections import deque
+
+    time_sim = 20.0
+    steps = int(time_sim / dt_control)
+    state = np.zeros(12)
+
+    u_max = b_coeff * MAX_OMEGA_SQ * 4
+    erro_max = 0.5
+    kp_z = (u_max - g * m) / (erro_max * m)
+    kd_z = 2 * np.sqrt(kp_z)
+
+    pid_vx = PIDController(kp=0.0, ki=0.0, kd=0.0, dt=dt_pid, limit=15.0)
+    pid_vy = PIDController(kp=0.0, ki=0.0, kd=0.0, dt=dt_pid, limit=15.0)
+    pid_z = PIDController(kp=kp_z, ki=0.1, kd=kd_z, dt=dt_pid, limit=15.0)
+
+    history = {
+        "t": [],
+        "x": [],
+        "y": [],
+        "z": [],
+        "vx": [],
+        "vy": [],
+        "vz": [],
+        "phi": [],
+        "theta": [],
+        "psi": [],
+        "phi_est": [],
+        "theta_est": [],
+        "psi_est": [],
+        "wind_x": [],
+        "wind_y": [],
+        "wind_z": [],
+        "rpm1": [],
+        "rpm2": [],
+        "rpm3": [],
+        "rpm4": [],
+        "ax_meas": [],
+        "ay_meas": [],
+        "az_meas": [],
+        "gx_meas": [],
+        "gy_meas": [],
+        "gz_meas": [],
+        "mx_meas": [],
+        "my_meas": [],
+        "mz_meas": [],
+    }
+
+    # Buffer de atraso do sensor (mesma lógica do Modo 1)
+    delay_steps_f = SENSOR_DELAY_S / dt_control
+    buf_len_s = max(int(np.ceil(delay_steps_f)) + 2, 2)
+    _zero_s = (np.zeros(3), np.zeros(3), np.zeros(3))
+    sensor_buf = deque([_zero_s] * buf_len_s, maxlen=buf_len_s)
+
+    # Buffer de atraso de estimativa (simula SDRE levando PIPELINE_STATE_DELAY_S)
+    pipeline_steps = max(1, round(PIPELINE_STATE_DELAY_S / dt_control))
+    est_buf = deque([np.zeros(6)] * (pipeline_steps + 1), maxlen=pipeline_steps + 1)
+
+    # SDRE roda a cada ciclo síncrono completo (DT_SYNC_CYCLE)
+    sync_sdre_every = max(1, round(DT_SYNC_CYCLE / dt_control))
+
+    K_sync = np.zeros((3, 6))
+    phi_ref, theta_ref = 0.0, 0.0
+    T_ideal = m * g
+    quat = np.array([1.0, 0.0, 0.0, 0.0])
+    a_cg_world_prev = np.array([0.0, 0.0, 0.0])
+
+    for step in range(steps):
+        t = step * dt_control
+        vx, vy, vz = state[3], state[4], state[5]
+        phi_t, theta_t, psi_t = state[6], state[7], state[8]
+        p_t, q_t, r_t = state[9], state[10], state[11]
+        z = state[2]
+
+        Vx_ref, Vy_ref, Z_ref = 0.0, 0.0, 1.0
+
+        w_x = np.random.normal(0.0, 0.2)
+        w_y = np.random.normal(0.0, 0.2)
+        w_z = np.random.normal(0.0, 0.1)
+
+        # ====================================================
+        # SENSORES + BUFFER DE ATRASO (idêntico ao Modo 1)
+        # ====================================================
+        R_true = get_rotation_matrix(phi_t, theta_t, psi_t)
+        accel_raw, gyro_raw, mag_raw = simulate_sensors(state, a_cg_world_prev, R_true)
+        sensor_buf.append((accel_raw, gyro_raw, mag_raw))
+
+        idx_int = int(delay_steps_f)
+        idx_frac = delay_steps_f - idx_int
+        n = len(sensor_buf)
+        i0 = min(idx_int, n - 1)
+        i1 = min(idx_int + 1, n - 1)
+        s0 = sensor_buf[n - 1 - i0]
+        s1 = sensor_buf[n - 1 - i1]
+        accel_meas = (1.0 - idx_frac) * s0[0] + idx_frac * s1[0]
+        gyro_meas = (1.0 - idx_frac) * s0[1] + idx_frac * s1[1]
+        mag_meas = (1.0 - idx_frac) * s0[2] + idx_frac * s1[2]
+
+        # MADGWICK (200Hz) — produz estimativa fresca
+        quat = madgwick_marg_update(
+            quat,
+            gyro_meas[0],
+            gyro_meas[1],
+            gyro_meas[2],
+            accel_meas[0],
+            accel_meas[1],
+            accel_meas[2],
+            mag_meas[0],
+            mag_meas[1],
+            mag_meas[2],
+            MADGWICK_BETA,
+            dt_control,
+        )
+        phi_est, theta_est, psi_est = quat_to_euler(quat)
+        p_est, q_est, r_est = gyro_meas[0], gyro_meas[1], gyro_meas[2]
+
+        # Empurra estimativa atual no buffer de pipeline e extrai com atraso
+        est_buf.append(np.array([phi_est, theta_est, psi_est, p_est, q_est, r_est]))
+        x_delayed = est_buf[
+            0
+        ]  # mais antigo = pipeline_steps atrás (= PIPELINE_STATE_DELAY_S)
+        ph_d, th_d, ps_d, p_d, q_d, r_d = x_delayed
+
+        # PID DE POSIÇÃO (10Hz)
+        if step % int(round(dt_pid / dt_control)) == 0:
+            ux = pid_vx.update(Vx_ref - vx)
+            uy = pid_vy.update(Vy_ref - vy)
+            uz = pid_z.update(Z_ref - z)
+            theta_ref = np.arctan2(ux, uz + g)
+            phi_ref = np.arctan2(-uy * np.cos(theta_ref), uz + g)
+            if 5.0 <= t <= 6.0:
+                phi_ref = 10.0 * np.pi / 180.0
+            elif 8.0 <= t <= 9.0:
+                phi_ref = -10.0 * np.pi / 180.0
+            T_ideal = m * (uz + g) / (np.cos(theta_ref) * np.cos(phi_ref))
+
+        # SDRE SÍNCRONO — recalcula a cada ciclo completo (~12.5ms)
+        # Usa estado com atraso de pipeline (mesmo que o controle usará)
+        if step % sync_sdre_every == 0:
+            Ad, Bd = get_sdre_matrices(ph_d, th_d, ps_d, p_d, q_d, r_d)
+            try:
+                P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
+                K_sync = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+            except (np.linalg.LinAlgError, ValueError):
+                pass  # DARE pode falhar em estado muito ill-conditioned — mantém K anterior
+
+        # CONTROLE (a cada step, 200Hz) — u = -K * x_delayed
+        # K e x_delayed provêm do mesmo estado com PIPELINE_STATE_DELAY_S de atraso
+        x_att_d = x_delayed
+        x_ref = np.array([phi_ref, theta_ref, 0.0, 0.0, 0.0, 0.0])
+        tau_ideal = -K_sync @ (x_att_d - x_ref)
+
+        # ========================================================
+        # MIXER + SATURAÇÃO + DINÂMICA (idênticos ao Modo 1)
+        # ========================================================
+        efforts_ideal = np.array([T_ideal, tau_ideal[0], tau_ideal[1], tau_ideal[2]])
+        omega_sq_ideal = M_inv @ efforts_ideal
+        omega_sq_real = np.clip(omega_sq_ideal, 0.0, MAX_OMEGA_SQ)
+        rpms = np.sqrt(omega_sq_real) * (60.0 / (2 * np.pi))
+        efforts_real = M_mixer_real @ omega_sq_real
+        T_real = efforts_real[0]
+        tau_real = efforts_real[1:4]
+
+        drag_accel = (-K_DRAG_TRANS / m) * np.array([vx, vy, vz])
+        a_cg_world = np.array(
+            [
+                (T_real / m) * (np.sin(theta_t) * np.cos(phi_t)) + w_x + drag_accel[0],
+                (T_real / m) * (-np.sin(phi_t)) + w_y + drag_accel[1],
+                (T_real / m) * (np.cos(theta_t) * np.cos(phi_t))
+                - g
+                + w_z
+                + drag_accel[2],
+            ]
+        )
+        dvx, dvy, dvz = a_cg_world
+        a_cg_world_prev = a_cg_world
+
+        dp = tau_real[0] / Ixx + ((Iyy - Izz) / Ixx) * q_t * r_t
+        dq = tau_real[1] / Iyy + ((Izz - Ixx) / Iyy) * p_t * r_t
+        dr = tau_real[2] / Izz + ((Ixx - Iyy) / Izz) * p_t * q_t
+
+        dphi = (
+            p_t
+            + q_t * np.sin(phi_t) * np.tan(theta_t)
+            + r_t * np.cos(phi_t) * np.tan(theta_t)
+        )
+        dtheta = q_t * np.cos(phi_t) - r_t * np.sin(phi_t)
+        dpsi = q_t * np.sin(phi_t) / np.cos(theta_t) + r_t * np.cos(phi_t) / np.cos(
+            theta_t
+        )
+
+        state[0] += state[3] * dt_control
+        state[1] += state[4] * dt_control
+        state[2] += state[5] * dt_control
+        state[3] += dvx * dt_control
+        state[4] += dvy * dt_control
+        state[5] += dvz * dt_control
+        state[6] += dphi * dt_control
+        state[7] += dtheta * dt_control
+        state[8] += dpsi * dt_control
+        state[9] += dp * dt_control
+        state[10] += dq * dt_control
+        state[11] += dr * dt_control
+
+        history["t"].append(t)
+        history["x"].append(state[0])
+        history["y"].append(state[1])
+        history["z"].append(state[2])
+        history["vx"].append(state[3])
+        history["vy"].append(state[4])
+        history["vz"].append(state[5])
+        history["phi"].append(state[6])
+        history["theta"].append(state[7])
+        history["psi"].append(state[8])
+        history["phi_est"].append(phi_est)
+        history["theta_est"].append(theta_est)
+        history["psi_est"].append(psi_est)
+        history["wind_x"].append(w_x)
+        history["wind_y"].append(w_y)
+        history["wind_z"].append(w_z)
+        history["rpm1"].append(rpms[0])
+        history["rpm2"].append(rpms[1])
+        history["rpm3"].append(rpms[2])
+        history["rpm4"].append(rpms[3])
+        history["ax_meas"].append(accel_meas[0])
+        history["ay_meas"].append(accel_meas[1])
+        history["az_meas"].append(accel_meas[2])
+        history["gx_meas"].append(gyro_meas[0])
+        history["gy_meas"].append(gyro_meas[1])
+        history["gz_meas"].append(gyro_meas[2])
+        history["mx_meas"].append(mag_meas[0])
+        history["my_meas"].append(mag_meas[1])
+        history["mz_meas"].append(mag_meas[2])
+
+    return history
+
+
+# ==========================================
+# ESTUDO: SDRE ASSÍNCRONO vs SÍNCRONO vs LQR FIXO
+# ==========================================
+# ---- Condições iniciais extremas para cenário 'recovery' (configurável) ----
+# Drone "lançado" no ar: longe do equilíbrio + alta velocidade angular.
+# Aqui a linearização do LQR (em torno de zero) ignora termos como
+# sin(phi)·tan(theta) e (Iyy-Izz)/Ixx·r — que dominam a dinâmica real.
+IC_PHI_DEG = 80.0  # roll inicial AGRESSIVO — sin(80°)=0.985
+IC_THETA_DEG = 80.0  # pitch inicial AGRESSIVO — tan(80°)=5.67, 1/cos(80°)=5.76
+IC_PSI_DEG = 80.0  # yaw inicial AGRESSIVO
+IC_P_DEG_S = 100.0  # roll rate — no limite p_max
+IC_Q_DEG_S = 80.0  # pitch rate
+IC_R_DEG_S = 200.0  # yaw rate — no limite r_max
+
+# Sem estrangulamento de tau (pesos main.cpp são suaves → K naturalmente
+# menos agressivo → NL importa mais → LQR sofre sem precisar reduzir torque)
+TAU_SCALE_STUDY = 1.0
+TAU_DIST_YAW = 0.0
+
+
+def simulate_attitude_isolated(
+    controller_type, scenario="recovery", time_sim=3.5, seed=42
+):
+    """Dinâmica de atitude isolada — sem PID/Madgwick/sensores.
+
+    Controladores comparados:
+      'sync_sdre'  : K recalculado a cada dt_control (SDRE verdadeiro, 200Hz)
+      'async_sdre' : K recalculado a cada dt_sdre (24ms) — emula main.cpp
+      'fixed_lqr'  : K calculado uma vez no equilíbrio (LQR clássico)
+
+    Cenários:
+      'recovery' : IC LONGE do equilíbrio + ref=zero (drone "lançado").
+                   LQR linearizado em torno de zero IGNORA os termos não-lineares
+                   dominantes (sin·tan, acoplamento gyro·r) → tipicamente falha.
+      'steps'    : degraus simultâneos em roll/pitch/yaw (manobra agressiva).
+    """
+    np.random.seed(seed)
+    steps = int(time_sim / dt_control)
+
+    # Estado inicial conforme cenário
+    if scenario == "recovery":
+        state = np.array(
+            [
+                np.deg2rad(IC_PHI_DEG),
+                np.deg2rad(IC_THETA_DEG),
+                np.deg2rad(IC_PSI_DEG),
+                np.deg2rad(IC_P_DEG_S),
+                np.deg2rad(IC_Q_DEG_S),
+                np.deg2rad(IC_R_DEG_S),
+            ]
+        )
+    else:
+        state = np.zeros(6)
+
+    # No cenário recovery, aplica TAU_SCALE_STUDY (drone subatuado)
+    scale = TAU_SCALE_STUDY if scenario == "recovery" else 1.0
+    tau_max = np.array([max_tau_roll, max_tau_pitch, max_tau_yaw]) * scale
+
+    # Inicializa K no equilíbrio (todos os controladores partem daqui)
+    Ad, Bd = get_sdre_matrices(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
+    K = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+
+    sdre_acc = dt_sdre  # força recálculo no primeiro step (modo async)
+
+    history = {
+        "t": [],
+        "phi": [],
+        "theta": [],
+        "psi": [],
+        "p": [],
+        "q": [],
+        "r": [],
+        "phi_ref": [],
+        "theta_ref": [],
+        "psi_ref": [],
+        "tau_r": [],
+        "tau_p": [],
+        "tau_y": [],
+        "K_full": [],
+    }
+
+    for step in range(steps):
+        t = step * dt_control
+
+        # Referência por cenário
+        if scenario == "recovery":
+            ref = np.zeros(6)  # tarefa: estabilizar em zero
+        elif scenario == "steps":
+            if t < 0.3:
+                ref = np.zeros(6)
+            elif t < 1.5:
+                ref = np.array(
+                    [np.deg2rad(30), np.deg2rad(20), np.deg2rad(60), 0.0, 0.0, 0.0]
+                )
+            elif t < 2.7:
+                ref = np.array(
+                    [np.deg2rad(-30), np.deg2rad(-20), np.deg2rad(-60), 0.0, 0.0, 0.0]
+                )
+            else:
+                ref = np.zeros(6)
+        else:
+            ref = np.zeros(6)
+
+        phi, theta, psi, p, q, r = state
+
+        # Atualização de K conforme controlador
+        if controller_type == "sync_sdre":
+            Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
+            try:
+                P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
+                K = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+            except (np.linalg.LinAlgError, ValueError):
+                pass  # DARE pode falhar em estado muito ill-conditioned — mantém K anterior
+        elif controller_type == "async_sdre":
+            sdre_acc += dt_control
+            if sdre_acc >= dt_sdre:
+                sdre_acc -= dt_sdre
+                Ad, Bd = get_sdre_matrices(phi, theta, psi, p, q, r)
+                try:
+                    P = scipy.linalg.solve_discrete_are(Ad, Bd, Q, R_mat)
+                    K = np.linalg.inv(R_mat + Bd.T @ P @ Bd) @ (Bd.T @ P @ Ad)
+                except np.linalg.LinAlgError:
+                    pass
+        # fixed_lqr: K nunca muda
+
+        # Controle saturado em torque máximo físico
+        tau = -K @ (state - ref)
+        tau = np.clip(tau, -tau_max, tau_max)
+
+        # Dinâmica verdadeira (Euler-Newton com acoplamento giroscópico completo)
+        # Disturbance permanente de yaw simula vento de cauda (só no recovery)
+        tau_dist_y = TAU_DIST_YAW if scenario == "recovery" else 0.0
+        dp = tau[0] / Ixx + ((Iyy - Izz) / Ixx) * q * r
+        dq = tau[1] / Iyy + ((Izz - Ixx) / Iyy) * p * r
+        dr = (tau[2] + tau_dist_y) / Izz + ((Ixx - Iyy) / Izz) * p * q
+        # Singularidade gimbal: pitch perto de ±90° trava simulação
+        cp = np.cos(theta)
+        if abs(cp) < 1e-3:
+            cp = np.sign(cp) * 1e-3 if cp != 0 else 1e-3
+        dphi = p + q * np.sin(phi) * np.tan(theta) + r * np.cos(phi) * np.tan(theta)
+        dtheta = q * np.cos(phi) - r * np.sin(phi)
+        dpsi = q * np.sin(phi) / cp + r * np.cos(phi) / cp
+
+        state[0] += dphi * dt_control
+        state[1] += dtheta * dt_control
+        state[2] += dpsi * dt_control
+        state[3] += dp * dt_control
+        state[4] += dq * dt_control
+        state[5] += dr * dt_control
+
+        history["t"].append(t)
+        history["phi"].append(state[0])
+        history["theta"].append(state[1])
+        history["psi"].append(state[2])
+        history["p"].append(state[3])
+        history["q"].append(state[4])
+        history["r"].append(state[5])
+        history["phi_ref"].append(ref[0])
+        history["theta_ref"].append(ref[1])
+        history["psi_ref"].append(ref[2])
+        history["tau_r"].append(tau[0])
+        history["tau_p"].append(tau[1])
+        history["tau_y"].append(tau[2])
+        history["K_full"].append(K.copy())
+
+    return history
+
+
+def run_async_sdre_study(scenario="recovery"):
+    """Compara SDRE sync / SDRE async (24ms) / LQR fixo.
+
+    Cenário padrão: 'recovery' — IC longe do equilíbrio + ref=zero.
+    Regime onde a linearização do LQR em torno do equilíbrio é INVÁLIDA.
+
+    Métrica-chave:
+        ρ = ||K_async - K_fixed|| / ||K_sync - K_fixed||
+        ρ → 1  : async preserva SDRE (controle 'verdadeiramente SDRE')
+        ρ → 0  : async ≈ LQR fixo (SDRE perdido, ganho 'sofisticado' só na partida)
+    """
+    print("\n" + "=" * 64)
+    print(" ESTUDO — Async SDRE: 'LQR sofisticado' ou SDRE de fato?")
+    print(f" Cenário: {scenario}")
+    print("=" * 64)
+    print(f"   dt_control     : {dt_control * 1000:.1f} ms")
+    print(f"   dt_sdre        : {dt_sdre * 1000:.1f} ms")
+    print(f"   tau_max (roll) : {max_tau_roll * 1e3:.2f} mN·m")
+    p_dot_max = max_tau_roll / Ixx
+    print(
+        f"   p_dot_max      : {p_dot_max:.0f} rad/s²  "
+        f"({np.degrees(p_dot_max):.0f} °/s²)"
+    )
+    print(
+        f"   Δp em 24ms     : {p_dot_max * dt_sdre:.1f} rad/s  "
+        f"({np.degrees(p_dot_max * dt_sdre):.0f} °/s)  ← K stale por isso"
+    )
+
+    if scenario == "recovery":
+        # Diagnóstico: quanto a A real difere da A linearizada em zero?
+        A04_real = np.sin(np.deg2rad(IC_PHI_DEG)) * np.tan(np.deg2rad(IC_THETA_DEG))
+        A34_real = ((Iyy - Izz) / Ixx) * np.deg2rad(IC_R_DEG_S)
+        print("")
+        print(f"   tau_scale      : {TAU_SCALE_STUDY*100:.0f}% (drone subatuado)")
+        print(f"   tau disturbance yaw : {TAU_DIST_YAW*1e3:.2f} mN·m permanente")
+        print(f"   --- Cegueira do LQR no estado inicial ---")
+        print(
+            f"   IC: phi={IC_PHI_DEG}° theta={IC_THETA_DEG}° psi={IC_PSI_DEG}°  "
+            f"p={IC_P_DEG_S}°/s q={IC_Q_DEG_S}°/s r={IC_R_DEG_S}°/s"
+        )
+        print(f"   A[0,4] (sin(phi)·tan(theta))  : LQR=0.000  Real={A04_real:.3f}")
+        print(f"   A[3,4] ((Iyy-Izz)/Ixx · r)    : LQR=0.000  Real={A34_real:.3f}")
+    print("=" * 64)
+
+    h_sync = simulate_attitude_isolated("sync_sdre", scenario=scenario)
+    h_async = simulate_attitude_isolated("async_sdre", scenario=scenario)
+    h_fixed = simulate_attitude_isolated("fixed_lqr", scenario=scenario)
+
+    K_sync = np.array(h_sync["K_full"])
+    K_async = np.array(h_async["K_full"])
+    K_fixed = np.array(h_fixed["K_full"])
+
+    # Distâncias Frobenius entre matrizes K ao longo do tempo
+    d_sync_fixed = np.linalg.norm(K_sync - K_fixed, axis=(1, 2))
+    d_async_fixed = np.linalg.norm(K_async - K_fixed, axis=(1, 2))
+    d_async_sync = np.linalg.norm(K_async - K_sync, axis=(1, 2))
+
+    mask = d_sync_fixed > 1e-9
+    rho = (
+        np.mean(d_async_fixed[mask]) / np.mean(d_sync_fixed[mask])
+        if mask.any()
+        else 0.0
+    )
+
+    # Métrica de desempenho: RMS de erro de tracking em ângulos
+    def rms_err(h):
+        e_phi = np.array(h["phi"]) - np.array(h["phi_ref"])
+        e_theta = np.array(h["theta"]) - np.array(h["theta_ref"])
+        e_psi = np.array(h["psi"]) - np.array(h["psi_ref"])
+        return np.degrees(np.sqrt(np.mean(e_phi**2 + e_theta**2 + e_psi**2)))
+
+    print(f"\n   ||K_sync  - K_fixed|| médio = {np.mean(d_sync_fixed):.3e}")
+    print(f"   ||K_async - K_fixed|| médio = {np.mean(d_async_fixed):.3e}")
+    print(f"   ||K_async - K_sync||  médio = {np.mean(d_async_sync):.3e}")
+    print(f"\n   ρ = K_async/K_sync (vs K_fixed) = {rho * 100:.1f}%")
+    if rho > 0.85:
+        verdict = "async PRESERVA o SDRE (~SDRE verdadeiro)"
+    elif rho > 0.5:
+        verdict = "async é HÍBRIDO (parte SDRE, parte LQR)"
+    else:
+        verdict = "async ≈ LQR sofisticado (SDRE perdido)"
+    print(f"   Veredito: {verdict}")
+
+    # Detecta divergência (estado explode → controlador falhou)
+    def diverged(h):
+        return (
+            np.max(np.abs(h["phi"])) > np.pi * 2
+            or np.max(np.abs(h["theta"])) > np.pi * 0.95  # gimbal lock
+            or np.max(np.abs(h["p"])) > np.deg2rad(2000)
+            or not np.isfinite(np.array(h["phi"])).all()
+        )
+
+    def settling_time_s(h, tol_deg=5.0):
+        """Tempo até |phi|, |theta|, |psi| ficarem < tol_deg e permanecerem."""
+        arr = np.degrees(
+            np.sqrt(
+                np.array(h["phi"]) ** 2
+                + np.array(h["theta"]) ** 2
+                + np.array(h["psi"]) ** 2
+            )
+        )
+        below = arr < tol_deg
+        if not below.any():
+            return float("inf")
+        # último cruzamento acima → 1º index abaixo daí em diante
+        last_above = np.where(~below)[0]
+        if len(last_above) == 0:
+            return 0.0
+        idx = last_above[-1] + 1
+        return idx * dt_control if idx < len(arr) else float("inf")
+
+    print(f"\n   RMS erro angular total (||[φ,θ,ψ]−ref||):")
+    for name, h in [
+        ("sync_sdre", h_sync),
+        ("async_sdre", h_async),
+        ("fixed_lqr", h_fixed),
+    ]:
+        div = " ✗ DIVERGIU" if diverged(h) else ""
+        ts = settling_time_s(h)
+        ts_str = f"{ts:.2f}s" if np.isfinite(ts) else "não estabiliza"
+        print(f"     {name:11s} = {rms_err(h):7.2f}°   settle(±5°)={ts_str}{div}")
+    print("=" * 64 + "\n")
+
+    # ===== GRÁFICOS =====
+    t = np.array(h_sync["t"])
+    colors = {"sync_sdre": "g", "async_sdre": "b", "fixed_lqr": "r"}
+    histories = {"sync_sdre": h_sync, "async_sdre": h_async, "fixed_lqr": h_fixed}
+
+    fig, axes = plt.subplots(3, 3, figsize=(17, 11))
+    fig.suptitle(
+        f"Estudo Async SDRE — Cenário '{scenario}'  "
+        f"IC: φ={IC_PHI_DEG}° θ={IC_THETA_DEG}° ψ={IC_PSI_DEG}°  "
+        f"p={IC_P_DEG_S}°/s q={IC_Q_DEG_S}°/s r={IC_R_DEG_S}°/s   "
+        f"(ρ = {rho*100:.1f}% → {verdict})",
+        fontsize=11,
+    )
+
+    angles = [("phi", "Roll φ"), ("theta", "Pitch θ"), ("psi", "Yaw ψ")]
+    for col, (k, lbl) in enumerate(angles):
+        ax = axes[0, col]
+        for name, h in histories.items():
+            ax.plot(t, np.degrees(h[k]), colors[name], label=name, lw=1.4, alpha=0.85)
+        ax.plot(t, np.degrees(h_sync[k + "_ref"]), "k--", lw=1, label="ref")
+        ax.set_title(f"{lbl} (°)")
+        ax.set_xlabel("t (s)")
+        ax.grid(True)
+        ax.legend(fontsize=8)
+
+    rates = [("p", "p (roll rate)"), ("q", "q (pitch rate)"), ("r", "r (yaw rate)")]
+    for col, (k, lbl) in enumerate(rates):
+        ax = axes[1, col]
+        for name, h in histories.items():
+            ax.plot(t, np.degrees(h[k]), colors[name], label=name, lw=1.3, alpha=0.85)
+        ax.set_title(f"{lbl} (°/s)")
+        ax.set_xlabel("t (s)")
+        ax.grid(True)
+        ax.legend(fontsize=8)
+
+    ax = axes[2, 0]
+    ax.plot(t, [np.linalg.norm(M) for M in K_sync], "g", label="||K_sync||", lw=1.4)
+    ax.plot(t, [np.linalg.norm(M) for M in K_async], "b", label="||K_async||", lw=1.4)
+    ax.plot(t, [np.linalg.norm(M) for M in K_fixed], "r", label="||K_fixed||", lw=1.4)
+    ax.set_title("||K||  Frobenius")
+    ax.set_xlabel("t (s)")
+    ax.grid(True)
+    ax.legend(fontsize=8)
+
+    ax = axes[2, 1]
+    ax.plot(t, d_sync_fixed, "g", label="||K_sync − K_fixed||", lw=1.4)
+    ax.plot(t, d_async_fixed, "b", label="||K_async − K_fixed||", lw=1.4)
+    ax.plot(t, d_async_sync, "orange", label="||K_async − K_sync||", lw=1.4)
+    ax.set_title("Distância entre ganhos K")
+    ax.set_xlabel("t (s)")
+    ax.grid(True)
+    ax.legend(fontsize=8)
+
+    ax = axes[2, 2]
+    for name, h in histories.items():
+        tau_mag = np.sqrt(
+            np.array(h["tau_r"]) ** 2
+            + np.array(h["tau_p"]) ** 2
+            + np.array(h["tau_y"]) ** 2
+        )
+        ax.plot(t, tau_mag * 1e3, colors[name], label=name, lw=1.3, alpha=0.85)
+    tau_max_norm = np.linalg.norm([max_tau_roll, max_tau_pitch, max_tau_yaw]) * 1e3
+    ax.axhline(tau_max_norm, color="k", ls=":", lw=1, label="||τ_max||")
+    ax.set_title("Esforço de controle ||τ|| (mN·m)")
+    ax.set_xlabel("t (s)")
+    ax.grid(True)
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    return h_sync, h_async, h_fixed
+
+
+# ==========================================
+# EXECUÇÃO
+# ==========================================
+if SIM_MODE == 1:
+    print("Rodando Modo 1: assíncrono (controle 5ms / SDRE 24ms)...")
+    history = simulate()
+elif SIM_MODE == 2:
+    print("Rodando Modo 2: síncrono com pipeline (atraso de estado 10ms)...")
+    history = simulate_sync_pipeline()
+elif SIM_MODE == 3:
+    print("Rodando Modo 3: estudo do impacto do SDRE assíncrono...")
+    _h_sync, _h_async, _h_fixed = run_async_sdre_study()
+    plt.show()
+    import sys
+
+    sys.exit(0)
+else:  # SIM_MODE == 0: ambos
+    print("Rodando Modo 1: assíncrono...")
+    np.random.seed(42)
+    history_async = simulate()
+    print("Rodando Modo 2: síncrono com pipeline...")
+    np.random.seed(42)
+    history_sync = simulate_sync_pipeline()
+    history = history_async  # gráficos individuais usam Modo 1 por padrão
+
+# ==========================================
+# GRÁFICO DE COMPARAÇÃO (somente quando SIM_MODE == 0)
+# ==========================================
+if SIM_MODE == 0:
+    t_a = np.array(history_async["t"])
+    t_s = np.array(history_sync["t"])
+
+    fig_cmp, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig_cmp.suptitle(
+        "Comparação: Modo 1 (Assíncrono, SDRE 24ms)  vs  Modo 2 (Síncrono, atraso 10ms)",
+        fontsize=13,
+    )
+
+    angle_defs = [
+        ("phi", "Roll ($\\phi$)", "g"),
+        ("theta", "Pitch ($\\theta$)", "r"),
+        ("psi", "Yaw ($\\psi$)", "b"),
+    ]
+
+    for row, (key, label, color) in enumerate(angle_defs):
+        real_a = np.degrees(np.array(history_async[key]))
+        real_s = np.degrees(np.array(history_sync[key]))
+
+        # Coluna esquerda: trajetórias
+        ax = axes[row, 0]
+        ax.plot(t_a, real_a, color=color, lw=1.5, label="Modo 1 – Assíncrono")
+        ax.plot(
+            t_s,
+            real_s,
+            color=color,
+            lw=1.2,
+            ls="--",
+            alpha=0.8,
+            label="Modo 2 – Síncrono",
+        )
+        ax.axhline(0, color="k", lw=0.8, ls=":")
+        if key == "phi":
+            ax.axhspan(5, 6, color="orange", alpha=0.15, label="Ref +10°")
+            ax.axhspan(-10, -10, color="purple", alpha=0.0)
+        ax.set_ylabel(f"{label} (graus)")
+        ax.set_title(f"{label}: Real")
+        ax.legend(fontsize=8)
+        ax.grid(True)
+
+        # Coluna direita: erro (real − zero)
+        ax2 = axes[row, 1]
+        ax2.plot(t_a, real_a, color=color, lw=1.5, label="Modo 1")
+        ax2.plot(t_s, real_s, color=color, lw=1.2, ls="--", alpha=0.8, label="Modo 2")
+        rms_a = np.sqrt(np.mean(real_a**2))
+        rms_s = np.sqrt(np.mean(real_s**2))
+        ax2.set_title(f"{label}: RMS Modo1={rms_a:.2f}°  RMS Modo2={rms_s:.2f}°")
+        ax2.set_ylabel("Graus")
+        ax2.legend(fontsize=8)
+        ax2.grid(True)
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel("Tempo (s)")
+
+    plt.tight_layout()
 
 # ==========================================
 # 4. GRÁFICOS — DESEMPENHO DE CONTROLE
@@ -831,7 +1551,12 @@ def update_anim(frame):
     return line_x, line_y, path
 
 
+anim_stride = max(1, round(0.020 / dt_control))  # mantém velocidade real (20ms/frame)
 ani = animation.FuncAnimation(
-    fig2, update_anim, frames=np.arange(0, len(hx), 2), interval=20, blit=False
+    fig2,
+    update_anim,
+    frames=np.arange(0, len(hx), anim_stride),
+    interval=20,
+    blit=False,
 )
 plt.show()
