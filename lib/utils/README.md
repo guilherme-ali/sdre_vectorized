@@ -15,12 +15,21 @@ Helpers compartilhados pelo `main.cpp`: drivers de sensores (MPU6050, QMC5883L),
 - MPU6050 em `0x68`
 - QMC5883L em `0x0D` (compartilha barramento; `start_QMC5883L` reusa o `Wire` já inicializado pelo MPU)
 
+## Leitura rápida do MPU (`read_MPU6050_raw`)
+
+O `mpu.getEvent()` da Adafruit custa **~1 ms** no ESP32-S2 — overhead de software (Adafruit_BusIO + stack `Wire`), não do clock (já em 400 kHz). O loop de voo usa `read_MPU6050_raw`, que faz um **burst read cru** dos 14 registradores (`0x3B`..`0x48`) direto pelo `Wire`, aplicando as **mesmas escalas** da Adafruit (range 2 g / 1000 °/s). Resultado: **~458 µs (≈1.8× mais rápido)** com valores idênticos.
+
+- A **inicialização/configuração** continua pela lib Adafruit (`start_IMU_MPU6050`) — só a leitura quente é crua.
+- ⚠️ As escalas estão fixas para os ranges de `start_IMU_MPU6050` (2 g, 1000 °/s). **Se mudar os ranges, atualizar as constantes** em `read_MPU6050_raw`.
+- Esse ganho foi o que permitiu o loop de controle **síncrono** caber abaixo de 5 ms.
+
 ## API principal
 
 ```cpp
 // Sensores
 void start_IMU_MPU6050(Adafruit_MPU6050& mpu);
-void read_MPU6050(...);                 // saída: ax,ay,az em g; gx,gy,gz em rad/s
+void read_MPU6050(...);                 // saída: ax,ay,az em g; gx,gy,gz em rad/s (via lib Adafruit)
+void read_MPU6050_raw(...);             // idem — burst read cru via Wire, ~1.8x mais rápido (loop de voo)
 void start_QMC5883L(TwoWire& wire);
 void setQMC5883LCalibration(...);       // hard-iron offsets + soft-iron scales
 void read_QMC5883L(float& mx, float& my, float& mz);  // saída em μT

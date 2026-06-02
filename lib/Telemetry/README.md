@@ -38,7 +38,7 @@ telemetry.reset();
 struct Sample {
     uint32_t t_ms;
     float roll, pitch, yaw;                 // rad (medido pelo Madgwick)
-    float roll_ref, pitch_ref, yaw_ref;     // rad (setpoint do controle remoto)
+    float roll_ref, pitch_ref, yaw_ref;     // rad — referência EFETIVA seguida (= −setpoint, pois Kr=−K)
     float p, q, r;                          // rad/s (taxas no corpo)
     float u0, u1, u2;                       // torques [N·m]: roll, pitch, yaw
     float w1_sq, w2_sq, w3_sq, w4_sq;       // rad²/s² (entrada dos ESCs)

@@ -47,8 +47,11 @@ lqr.computeGains("SDA");
 ```
 - **Melhor para**: Uso geral em tempo real — **escolha padrão para o projeto**
 - **Características**: Convergência quadrática, preserva estrutura simpléctica
-- **Complexidade**: O(n³) por iteração, ~8 iterações em regime
+- **Complexidade**: O(n³) por iteração, ~8–10 iterações em regime
 - **Robustez comprovada**: 0 falhas em 800 000 execuções; menor erro RMS (9,36×10⁻⁷)
+- **⚡ Caminho rápido em ponto fixo**: ao chamar `"SDA"`, o solver tenta primeiro a
+  versão **fixed-point Q13.18** (~2,7× mais rápida) e cai automaticamente para o SDA `float`
+  acima em caso de overflow/saturação. Ver [seção dedicada](#-caminho-rápido-sda-em-ponto-fixo-q1318).
 
 #### 2. SDA-ss (SDA com Single Shift)
 ```cpp
@@ -230,6 +233,35 @@ lqr.computeGains("ASDA");
 // NÃO recomendado em malha de tempo real.
 lqr.computeGains("ITERATIVE");
 ```
+
+## ⚡ Caminho rápido: SDA em ponto fixo (Q13.18)
+
+O `ESP32-S2` **não tem FPU** — cada operação `float` é soft-float (~56 ciclos), e o custo do SDA é
+dominado pelas 8 multiplicações 6×6 + inversão por iteração. Duas otimizações reduzem esse custo:
+
+### 1. SDA inteiro em ponto fixo Q13.18
+
+`computeGainMatrixSDA_Fixed()` resolve a DARE inteira em **`int32` ponto fixo** (formato **Q13.18**:
+13 bits inteiros = ±8192, 18 fracionários ≈ resolução 3,8×10⁻⁶). É o caminho que `computeGains("SDA")`
+tenta primeiro.
+
+- **~2,7× mais rápido** que o SDA `float` (matmuls inteiros ≈ 4,4×; inversão ≈ soft-float).
+- **Erro do `K` < 1 %** no ganho dominante — e o erro é **pura quantização** (não amplificado pelo
+  condicionamento da Riccati; cai pela metade a cada bit fracionário a mais).
+- **Formato escolhido pelo range real** do problema (pico ≈ 2980 nas matrizes do SDA): Q13.18 dá
+  margem 2,7× sobre esse pico, importante porque o SDRE varia as matrizes com o estado.
+- **Fallback automático**: se houver overflow/saturação (flag interna) ou matriz singular no domínio
+  fixed-point, retorna `false` e `computeGains("SDA")` recai no SDA `float` (exato) naquele ciclo.
+
+### 2. Kernel de multiplicação com saída simétrica
+
+`MatrixOperations::matrixMultiplySymOutput(a, b, c, n)` calcula `c = a·b` **assumindo `c` simétrica**:
+computa só o triângulo superior (21 de 36 elementos em 6×6) e espelha. Usado nas duas atualizações do
+SDA cujo produto é provadamente simétrico (identidade *push-through*: $W G_k$ e $H_k W$ são simétricas),
+economizando ~42 % nessas matmuls. **Válido apenas quando o chamador garante a simetria do resultado.**
+
+> Os benchmarks publicados (tabela acima, ~8,6 ms) referem-se ao SDA **`float`** — que continua como
+> caminho de *fallback*. O caminho de produção atual (`"SDA"` → fixed-point Q13.18) roda em ~3,2 ms.
 
 ## 🔬 Detalhes de Implementação
 

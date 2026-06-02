@@ -6,10 +6,11 @@ Controle de atitude de quadricóptero em **ESP32-S2** com **SDRE-LQR** (State-De
 
 - **Controle SDRE em tempo real** — ganhos K recalculados ciclo a ciclo a partir de A(x)
 - **Multiplos solvers DARE** — 7 algoritmos implementados em `lib/AUTOLQR/` (benchmark abaixo)
+- **Riccati em ponto fixo Q13.18** — caminho de produção do `"SDA"` ~2,7× mais rápido que `float`, com *fallback* automático em overflow (detalhes em `lib/AUTOLQR/`)
 - **PID alternativo** — controlador PID compatível com a mesma interface, selecionável via flag
-- **Madgwick (AHRS)** — estimação de orientação a partir de MPU6050 (+ QMC5883L opcional)
+- **Madgwick (AHRS)** — estimação de orientação a partir de MPU6050 (leitura crua ~1.8× + QMC5883L opcional)
 - **Butterworth digital** — filtro passa-baixa por eixo antes do AHRS (anti-aliasing em 200 Hz)
-- **Riccati em FreeRTOS task** — DARE desacoplada do loop principal (5 ms) via mutex
+- **Riccati desacoplada do ciclo** — modo **assíncrono** (FreeRTOS task, loop fixo a 200 Hz) ou **síncrono reordenado** (aplica K(x_{k−1}) e resolve K(x_k) *após* atuar), tirando a Riccati do caminho sensor→atuador
 - **Telemetria em RAM + LittleFS** — buffer circular de 1000 amostras, persistido em flash ao desarmar
 - **WiFi/UDP (CRTP)** — protocolo Crazyflie, compatível com o app **ESP-Drone** (Espressif)
 - **Failsafe de tilt** — desarma e trava motores em inclinação > 60° (zona singular `1/cos(pitch)`)
@@ -139,7 +140,7 @@ python matriz_otima/busca_parametros_otimos_sdre.py  # Busca Q,R ótimos
 ## Documentação
 
 - [`docs/REFERENCES.md`](docs/REFERENCES.md) — **referências bibliográficas de todos os métodos**
-- [`lib/AUTOLQR/README.md`](lib/AUTOLQR/README.md) — solvers DARE, API, benchmarks
+- [`lib/AUTOLQR/README.md`](lib/AUTOLQR/README.md) — solvers DARE, API, benchmarks, **fixed-point Q13.18**
 - [`lib/KalmanFilter/README.md`](lib/KalmanFilter/README.md) — filtro de Kalman linear (opcional)
 - [`lib/PIDController/README.md`](lib/PIDController/README.md) — controlador PID alternativo
 - [`lib/WiFiComm/README.md`](lib/WiFiComm/README.md) — protocolo CRTP e ESP-Drone
