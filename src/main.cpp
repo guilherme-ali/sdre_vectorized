@@ -628,9 +628,12 @@ void loop(){
     // ----- Telemetria em RAM (somente quando armado) -----
     // Custo: ~1 us — apenas escritas em RAM, sem printf nem I/O.
     if (motors.isArmed()) {
+        // Referencia EFETIVA que o drone segue: como Kr = -K[:,:3], a malha rastreia
+        // x_ang -> -phi_desired. Salvamos o negativo para o grafico casar com o angulo
+        // medido (roll/pitch/yaw). Apenas telemetria — nao afeta o controle.
         telemetry.log(millis(),
                       roll, pitch, yaw,
-                      phi_desired, theta_desired, yaw_desired,
+                      -phi_desired, -theta_desired, -yaw_desired,
                       p, q, r,
                       u[0], u[1], u[2],
                       w1_sq, w2_sq, w3_sq, w4_sq);
