@@ -19,7 +19,7 @@ const bool DEBUG_MODE       = false; // true: prints detalhados; false: Serial P
 const bool PRINT_TELEMETRY  = false; // true: stream continuo de roll,pitch,yaw,p,q,r
 const bool USE_MAGNETOMETER = false; // true: 9-DOF (QMC5883L); false: 6-DOF (accel+gyro)
 const int  CONTROLLER_TYPE  = 0;     // 0 = SDRE, 1 = PID
-const bool USE_ASYNC_SDRE   = true;  // true: Riccati em FreeRTOS task; false: sincrono no loop
+const bool USE_ASYNC_SDRE   = false;  // true: Riccati em FreeRTOS task; false: sincrono no loop
 // =================================
 
 #include <Adafruit_MPU6050.h>
@@ -43,7 +43,7 @@ const float Iyy   = 16.57e-6f;  // kg·m^2 — inercia pitch
 const float Izz   = 29.80e-6f;  // kg·m^2 — inercia yaw
 const float Ir    = 1.02e-7f;   // kg·m^2 — inercia do rotor
 const float L_ARM = 0.060f * 0.70710678f; // 60 mm * sin(45°) — braco efetivo em config X
-const float SAMPLING_TIME_S         = 0.005f; // 5 ms (200 Hz)
+const float SAMPLING_TIME_S         = USE_ASYNC_SDRE ? 0.005f : 0.006f;
 const unsigned long LOOP_PERIOD_US  = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 
 // ===== Coeficientes motor + helice (medidos via test/motor_calibration_test.cpp) =====
@@ -161,7 +161,8 @@ BiquadFilter bq_ax, bq_ay, bq_az;
 BiquadFilter bq_gx, bq_gy, bq_gz;
 
 // Nyquist do loop (200 Hz) eh 100 Hz; cutoff abaixo disso evita quebrar o filtro.
-const float SENSOR_CUTOFF_HZ = 80.0f;
+const float perc_cutoff = 0.8f;
+const float SENSOR_CUTOFF_HZ = ((1.0f / SAMPLING_TIME_S)/2.0f) * perc_cutoff;
 
 // ===== Calibracao MPU6050 (obtida via test/calibrate_mpu.cpp) =====
 float accel_offset_x =  0.058127f;
