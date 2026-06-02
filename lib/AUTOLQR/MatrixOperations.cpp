@@ -166,6 +166,51 @@ IRAM_ATTR void MatrixOperations::matrixMultiply(const float* __restrict__ m1,
     }
 }
 
+// Multiplicação 6x6 com OUTPUT simétrico: calcula só triângulo superior (21
+// produtos) e espelha. Válido apenas quando a*b é matematicamente simétrico.
+IRAM_ATTR static void multiply_6x6_symout(const float* __restrict__ a,
+                                          const float* __restrict__ b,
+                                          float* __restrict__ c) {
+    for (int i = 0; i < 6; i++) {
+        const float* a_row = &a[i * 6];
+        const float a0 = a_row[0], a1 = a_row[1], a2 = a_row[2];
+        const float a3 = a_row[3], a4 = a_row[4], a5 = a_row[5];
+
+        for (int j = i; j < 6; j++) {
+            const float v = a0 * b[j]      + a1 * b[6 + j]  + a2 * b[12 + j]
+                          + a3 * b[18 + j] + a4 * b[24 + j] + a5 * b[30 + j];
+            c[i * 6 + j] = v;
+            c[j * 6 + i] = v;  // espelha
+        }
+    }
+}
+
+IRAM_ATTR void MatrixOperations::matrixMultiplySymOutput(const float* __restrict__ m1,
+                                                         const float* __restrict__ m2,
+                                                         float* __restrict__ result,
+                                                         int n)
+{
+    if (!m1 || !m2 || !result) return;
+
+    if (n == 6) {
+        multiply_6x6_symout(m1, m2, result);
+        return;
+    }
+
+    // Caso geral: triângulo superior + espelho
+    for (int i = 0; i < n; i++) {
+        const float* a_row = &m1[i * n];
+        for (int j = i; j < n; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < n; k++) {
+                sum += a_row[k] * m2[k * n + j];
+            }
+            result[i * n + j] = sum;
+            result[j * n + i] = sum;
+        }
+    }
+}
+
 // ============================================================================
 // OPERAÇÕES BÁSICAS OTIMIZADAS
 // ============================================================================

@@ -29,6 +29,18 @@ public:
     static void matrixMultiply(const float* m1, const float* m2, float* result, int rows1, int cols1, int cols2);
 
     /**
+     * @brief Multiply two n x n matrices when the RESULT is known to be symmetric
+     * @param m1 First matrix (n x n)
+     * @param m2 Second matrix (n x n)
+     * @param result Result matrix (n x n) - forçado simétrico
+     * @param n Matrix dimension
+     * @note Calcula só o triângulo superior (n(n+1)/2 produtos) e espelha.
+     *       Válido APENAS quando o chamador garante que m1*m2 é simétrico
+     *       (ex.: A·S·A' com S simétrico). ~42% menos operações em 6x6.
+     */
+    static void matrixMultiplySymOutput(const float* m1, const float* m2, float* result, int n);
+
+    /**
      * @brief Add two matrices (otimizado com desenrolamento de loops)
      * @param m1 First matrix
      * @param m2 Second matrix

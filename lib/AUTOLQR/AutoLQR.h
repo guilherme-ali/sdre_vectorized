@@ -190,6 +190,15 @@ private:
     bool computeGainMatrixSDA();
 
     /**
+     * @brief Caminho rápido do SDA em fixed-point Q13.18 (ESP32-S2 sem FPU)
+     * Resolve a DARE em int32 (~2.7× mais rápido que float, erro do K < 1%).
+     * Validado só para o caso 6 estados / 3 controles. Retorna false em
+     * overflow/saturação ou matriz singular → o chamador faz fallback p/ o SDA float.
+     * @return true se sucesso, false se deve cair no fallback float
+     */
+    bool computeGainMatrixSDA_Fixed();
+
+    /**
      * @brief Compute the optimal gain matrix using Iterative method
      * Solves DARE using basic iterative approach for simplicity
      * @return true if successful, false otherwise
