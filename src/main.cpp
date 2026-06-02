@@ -43,7 +43,7 @@ const float Iyy   = 16.57e-6f;  // kg·m^2 — inercia pitch
 const float Izz   = 29.80e-6f;  // kg·m^2 — inercia yaw
 const float Ir    = 1.02e-7f;   // kg·m^2 — inercia do rotor
 const float L_ARM = 0.060f * 0.70710678f; // 60 mm * sin(45°) — braco efetivo em config X
-const float SAMPLING_TIME_S         = USE_ASYNC_SDRE ? 0.005f : 0.006f;
+const float SAMPLING_TIME_S         = USE_ASYNC_SDRE ? 0.005f : 0.0051f;
 const unsigned long LOOP_PERIOD_US  = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 
 // ===== Coeficientes motor + helice (medidos via test/motor_calibration_test.cpp) =====
@@ -108,8 +108,8 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
 const float roll_max_rad  = 45.0f * DEG_TO_RAD;
 const float pitch_max_rad = 45.0f * DEG_TO_RAD;
 const float yaw_max_rad   = 90.0f * DEG_TO_RAD;
-const float p_max         = 100.0f * DEG_TO_RAD;
-const float q_max         = 100.0f * DEG_TO_RAD;
+const float p_max         = 300.0f * DEG_TO_RAD;
+const float q_max         = 300.0f * DEG_TO_RAD;
 const float r_max         = 200.0f * DEG_TO_RAD;
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
@@ -359,6 +359,14 @@ void setup() {
     // propaga para o controlador SDRE.
     updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 
+    // Sincrono reordenado: o controle usa o K do ciclo ANTERIOR, entao K_shared
+    // precisa ser valido antes do 1o ciclo. Calcula um ganho inicial em x=0.
+    // (No async, a SDRETask preenche K_shared em background.)
+    if (CONTROLLER_TYPE == 0 && !USE_ASYNC_SDRE) {
+        sdreController.computeGains();
+        sdreController.exportGains(K_shared);
+    }
+
     if (CONTROLLER_TYPE == 0) {
         Serial.println("🎯 Controlador: SDRE (State-Dependent Riccati Equation)");
     } else {
@@ -448,9 +456,11 @@ void loop(){
     leds.setUDPReceiving(!tilt_failsafe_latched && wifiComm.isClientConnected());
 
     // ----- Sensores + Butterworth -----
-    read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
-                 accel_offset_x, accel_offset_y, accel_offset_z,
-                 gyro_offset_x, gyro_offset_y, gyro_offset_z);
+    // Leitura crua (burst read via Wire): ~1.8x mais rapida que mpu.getEvent() da
+    // Adafruit, com escalas identicas. Init/config continua pela lib (start_IMU_MPU6050).
+    read_MPU6050_raw(ax, ay, az, gx, gy, gz,
+                     accel_offset_x, accel_offset_y, accel_offset_z,
+                     gyro_offset_x, gyro_offset_y, gyro_offset_z);
 
     ax = bq_ax.update(ax);
     ay = bq_ay.update(ay);
@@ -524,23 +534,13 @@ void loop(){
         t_checkpoint = micros();
         t_lqr    = 0; // computado na SDRETask
     } else {
-        unsigned long t_start = micros();
-        updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
-        sdre_t_updateMatrix = micros() - t_start;
+        // SINCRONO REORDENADO: o SDRE NAO roda aqui. Se rodasse, ficaria no caminho
+        // sensor->atuador, somando ~4ms de atraso de transporte -> oscilacao. O controle
+        // abaixo usa o K do ciclo ANTERIOR (ja em K_shared); o novo K e calculado ao FINAL
+        // do loop (apos aplicar os motores), com latencia de atuacao ~0 (como no async).
         t_matrix = micros() - t_checkpoint;
         t_checkpoint = micros();
-
-        t_start = micros();
-        float K_local_sync[CONTROL_SIZE * STATE_SIZE];
-        sdreController.computeGains();
-        sdreController.exportGains(K_local_sync);
-        sdre_t_computeGains = micros() - t_start;
-        t_lqr = micros() - t_checkpoint;
-        t_checkpoint = micros();
-
-        xSemaphoreTake(matricesMutex, portMAX_DELAY);
-        memcpy(K_shared, K_local_sync, sizeof(K_shared));
-        xSemaphoreGive(matricesMutex);
+        t_lqr = 0;
     }
 
     // ----- Logica de controle: extrai setpoint do comando remoto -----
@@ -608,6 +608,22 @@ void loop(){
         motors.stopAllMotors();
     }
     t_motor_set = micros() - t_checkpoint;
+
+    // ----- SINCRONO: calcula o SDRE para o PROXIMO ciclo, FORA do caminho de atuacao -----
+    // Os motores ja foram aplicados acima com o K do ciclo anterior, entao o tempo da
+    // Riccati (~3.7ms) nao atrasa a atuacao — mesmo padrao de latencia do async.
+    // (Em sync a SDRETask nao existe, entao escreve K_shared direto sem mutex.)
+    if (!USE_ASYNC_SDRE && CONTROLLER_TYPE == 0) {
+        unsigned long t_start = micros();
+        updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
+        sdre_t_updateMatrix = micros() - t_start;
+
+        t_start = micros();
+        sdreController.computeGains();
+        sdreController.exportGains(K_shared);
+        sdre_t_computeGains = micros() - t_start;
+        t_lqr = sdre_t_updateMatrix + sdre_t_computeGains;  // telemetria
+    }
 
     // ----- Telemetria em RAM (somente quando armado) -----
     // Custo: ~1 us — apenas escritas em RAM, sem printf nem I/O.

@@ -120,6 +120,67 @@ void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az,
     gz = g.gyro.z - gyro_offset_z;
 }
 
+// Endereço I2C e registro inicial do MPU6050 (mesmos usados por start_IMU_MPU6050)
+#define MPU6050_I2C_ADDR   0x68
+#define MPU6050_ACCEL_XOUT 0x3B  // primeiro de 14 regs: accel[6] temp[2] gyro[6]
+
+void read_MPU6050_raw(float& ax, float& ay, float& az,
+                      float& gx, float& gy, float& gz,
+                      float accel_offset_x, float accel_offset_y, float accel_offset_z,
+                      float gyro_offset_x, float gyro_offset_y, float gyro_offset_z) {
+    // Burst read dos 14 bytes a partir de ACCEL_XOUT_H. Pula a Adafruit_BusIO/getEvent,
+    // que na stack Wire do ESP32-S2 custa ~1 ms por leitura.
+    Wire.beginTransmission(MPU6050_I2C_ADDR);
+    Wire.write(MPU6050_ACCEL_XOUT);
+    Wire.endTransmission(false);                       // repeated-start (sem soltar o barramento)
+    Wire.requestFrom((uint8_t)MPU6050_I2C_ADDR, (uint8_t)14);
+
+    if (Wire.available() < 14) {                        // falha de leitura → zera (não propaga lixo)
+        ax = ay = az = gx = gy = gz = 0.0f;
+        return;
+    }
+
+    // Big-endian (H depois L). Leitura em variáveis ordenadas: a ordem de avaliação
+    // de Wire.read() em '(read()<<8)|read()' é NÃO-especificada em C++ — daria bug.
+    uint8_t axh = Wire.read(), axl = Wire.read();
+    uint8_t ayh = Wire.read(), ayl = Wire.read();
+    uint8_t azh = Wire.read(), azl = Wire.read();
+    uint8_t th  = Wire.read(), tl  = Wire.read();       // temperatura (descartada)
+    uint8_t gxh = Wire.read(), gxl = Wire.read();
+    uint8_t gyh = Wire.read(), gyl = Wire.read();
+    uint8_t gzh = Wire.read(), gzl = Wire.read();
+    (void)th; (void)tl;
+
+    int16_t rawAX = (int16_t)((axh << 8) | axl);
+    int16_t rawAY = (int16_t)((ayh << 8) | ayl);
+    int16_t rawAZ = (int16_t)((azh << 8) | azl);
+    int16_t rawGX = (int16_t)((gxh << 8) | gxl);
+    int16_t rawGY = (int16_t)((gyh << 8) | gyl);
+    int16_t rawGZ = (int16_t)((gzh << 8) | gzl);
+
+    // Escalas IDÊNTICAS às da Adafruit para os ranges de start_IMU_MPU6050:
+    //   accel RANGE_2_G     → 16384 LSB/g,        ×9.80665 → m/s²
+    //   gyro  RANGE_1000_DEG → 32.8 LSB/(°/s),    ×(π/180) → rad/s
+    // SE MUDAR OS RANGES em start_IMU_MPU6050, ATUALIZE ESTAS CONSTANTES.
+    const float ACC_LSB_TO_MS2 = 9.80665f / 16384.0f;
+    const float GYR_LSB_TO_RAD = 0.017453293f / 32.8f;
+
+    float acc_x = rawAX * ACC_LSB_TO_MS2;
+    float acc_y = rawAY * ACC_LSB_TO_MS2;
+    float acc_z = rawAZ * ACC_LSB_TO_MS2;
+    float gyr_x = rawGX * GYR_LSB_TO_RAD;
+    float gyr_y = rawGY * GYR_LSB_TO_RAD;
+    float gyr_z = rawGZ * GYR_LSB_TO_RAD;
+
+    // Mesmas conversões finais de read_MPU6050 (offsets + accel normalizado em g)
+    ax = (acc_x - accel_offset_x) / 9.81f;
+    ay = (acc_y - accel_offset_y) / 9.81f;
+    az = (acc_z - accel_offset_z) / 9.81f;
+    gx = gyr_x - gyro_offset_x;
+    gy = gyr_y - gyro_offset_y;
+    gz = gyr_z - gyro_offset_z;
+}
+
 // ============= FUNÇÕES DO QMC5883L (Magnetômetro) =============
 // Compartilha o barramento I2C do MPU6050 (SDA=GPIO11, SCL=GPIO10, 400 kHz).
 // Implementacao bare-metal (sem lib externa) para nao acoplar a Adafruit_Sensor.

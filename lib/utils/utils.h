@@ -23,6 +23,15 @@ void read_MPU6050(Adafruit_MPU6050& mpu, float& ax, float& ay, float& az,
                   float accel_offset_x, float accel_offset_y, float accel_offset_z,
                   float gyro_offset_x, float gyro_offset_y, float gyro_offset_z);
 
+// Leitura RÁPIDA do MPU6050: burst read cru dos 14 registros via Wire, com as
+// MESMAS escalas da Adafruit. Saída idêntica a read_MPU6050 (accel em g, gyro
+// rad/s). Mantém a init/config pela lib Adafruit (start_IMU_MPU6050).
+// IMPORTANTE: assume os ranges configurados em start_IMU_MPU6050 (2G, 1000°/s).
+void read_MPU6050_raw(float& ax, float& ay, float& az,
+                      float& gx, float& gy, float& gz,
+                      float accel_offset_x, float accel_offset_y, float accel_offset_z,
+                      float gyro_offset_x, float gyro_offset_y, float gyro_offset_z);
+
 // Funções de cálculo de controle
 void calculateMotorOmegaSq(float thrust_signal, float u_torques[],
                            float b_coeff, float d_coeff, float L_arm,
