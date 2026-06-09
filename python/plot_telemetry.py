@@ -120,19 +120,52 @@ def _apply_sanity(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def parse_legacy_log(text: str) -> pd.DataFrame | None:
+    """Faz o parse do formato antigo de log que printava continuamente."""
+    pattern = re.compile(r"Roll:([\-\.\d]+),Pitch:([\-\.\d]+),Yaw:([\-\.\d]+),P:([\-\.\d]+),Q:([\-\.\d]+),R:([\-\.\d]+)", re.IGNORECASE)
+    matches = pattern.findall(text)
+    if not matches:
+        return None
+    
+    data = []
+    t_ms = 0
+    dt_ms = 20 # Assume 50Hz for legacy logs
+    for m in matches:
+        data.append([
+            t_ms, float(m[0]), float(m[1]), float(m[2]),
+            0.0, 0.0, 0.0,
+            float(m[3]), float(m[4]), float(m[5]),
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0
+        ])
+        t_ms += dt_ms
+        
+    df = pd.DataFrame(data, columns=COLS)
+    return df
+
+
 def load_log(path: str) -> tuple[pd.DataFrame, str]:
     """Carrega o log, escolhe o maior bloco, aplica filtro de sanidade."""
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     blocks = _extract_blocks(text)
-    if not blocks:
-        raise ValueError(f"Nenhum bloco de telemetria encontrado em: {path}")
+    
+    df = None
+    n_blocks = 0
+    
+    if blocks:
+        dfs = [_parse_block(b) for b in blocks]
+        dfs = [d for d in dfs if d is not None and len(d) >= 5]
+        if dfs:
+            df = max(dfs, key=len)
+            n_blocks = len(dfs)
+            
+    if df is None:
+        df = parse_legacy_log(text)
+        if df is None:
+            raise ValueError(f"Nenhum dado de telemetria válido encontrado em: {path}")
+        print("  [aviso] Log em formato legado detectado. Assumindo dt=20ms e omitindo motores/controle.")
+        n_blocks = 1
 
-    dfs = [_parse_block(b) for b in blocks]
-    dfs = [d for d in dfs if d is not None and len(d) >= 5]
-    if not dfs:
-        raise ValueError("Blocos encontrados mas nenhum tem linhas válidas.")
-
-    df = max(dfs, key=len)
     before = len(df)
     df = _apply_sanity(df)
     removed = before - len(df)
@@ -151,7 +184,6 @@ def load_log(path: str) -> tuple[pd.DataFrame, str]:
     HOVER_THRESHOLD = 1e5  # ω² mínimo relevante
     df["flying"] = w_sum > HOVER_THRESHOLD
 
-    n_blocks = len(dfs)
     log_name = Path(path).name
     info = f"{log_name}  ·  {len(df)} amostras  ·  {df['t_s'].iloc[-1]:.1f} s  ·  {n_blocks} bloco(s)"
     return df, info
