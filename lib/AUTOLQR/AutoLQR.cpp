@@ -237,9 +237,9 @@ bool AutoLQR::computeGains(const char* method)
     bool K_flag = false;
     
     if (strcmp(method, "SDA") == 0) {
-        K_flag = computeGainMatrixSDA_Fixed();        // caminho rápido fixed-point Q13.18
-        //K_flag = computeGainMatrixSDA(); 
-        if (!K_flag) K_flag = computeGainMatrixSDA(); // fallback float (overflow/singular)
+        K_flag = computeGainMatrixSDA(); 
+    } else if (strcmp(method, "SDA_FIXED") == 0) {
+        K_flag = computeGainMatrixSDA_Fixed(); // caminho rápido fixed-point Q13.18
     } else if (strcmp(method, "SDA_SS") == 0) {
         K_flag = computeGainMatrixSDA_SS();
     } else if (strcmp(method, "ASDA") == 0) {
@@ -259,7 +259,7 @@ bool AutoLQR::computeGains(const char* method)
         Serial.print(F("Método desconhecido: "));
         Serial.print(method);
         Serial.println(F(". Usando SDA."));
-        K_flag = computeGainMatrixSDA();
+        K_flag = computeGainMatrixSDA_Fixed();
     }
     
     if (!K_flag)
