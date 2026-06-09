@@ -1,9 +1,10 @@
 /**
- * TESTE: Backup do Main - Implementação Completa do Sistema
- * 
- * Versão backup do código principal contendo a implementação completa do
- * controle de atitude do drone com sensores, filtros, comunicação WiFi e
- * controle de motores usando SDRE-LQR.
+ * Controle de atitude de quadricoptero em ESP32-S2 com SDRE-LQR (ou PID).
+ *
+ * Loop principal a 200 Hz (5 ms): IMU + Madgwick + alocacao X-quad.
+ * Task paralela (FreeRTOS) recalcula ganhos via DARE — desacopla a Riccati do ciclo.
+ * Telemetria em RAM (Telemetry) e persistente em LittleFS sob desarme.
+ * Comunicacao via WiFi/UDP (CRTP, compativel com app ESP-Drone da Espressif).
  */
 
 #include <AutoLQR.h>
@@ -13,82 +14,78 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
-// ===== FLAG DE DEBUG =====
-// Coloque true para ver prints detalhados, false para Serial Plotter
-const bool DEBUG_MODE = false;
-// ==========================
-
-// ===== FLAG DE TELEMETRIA =====
-// Coloque true para imprimir continuamente roll, pitch, yaw, p, q, r
-const bool PRINT_TELEMETRY = false;
-// ==============================
-
-// ===== FLAG DO MAGNETÔMETRO =====
-// Coloque true para usar QMC5883L, false para usar apenas accel+gyro (6-DOF)
-const bool USE_MAGNETOMETER = true;
-// =================================  
-
-// ===== TIPO DE CONTROLADOR =====
-// 0 = SDRE (State-Dependent Riccati Equation)
-// 1 = PID (Proportional-Integral-Derivative)
-const int CONTROLLER_TYPE = 0;
-// ================================
-
-#include "sensor_config.h" 
+// ===== Flags de configuracao =====
+const bool DEBUG_MODE       = false; // true: prints detalhados; false: Serial Plotter
+const bool PRINT_TELEMETRY  = false; // true: stream continuo de roll,pitch,yaw,p,q,r
+const bool USE_MAGNETOMETER = false; // true: 9-DOF (QMC5883L); false: 6-DOF (accel+gyro)
+const int  CONTROLLER_TYPE  = 0;     // 0 = SDRE, 1 = PID
+const bool USE_ASYNC_SDRE   = false;  // true: Riccati em FreeRTOS task; false: sincrono no loop
+// =================================
 
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 
-#include "utils.h" // Deve vir DEPOIS das definições de sensor
+#include "utils.h"
 #include "MotorControl.h" // Incluir controle de motores
 #include "WiFiComm.h" // Comunicação WiFi/UDP
 #include "led_control.h" // Controle de LEDs e bateria
 #include "Telemetry.h"   // Buffer circular de telemetria em RAM
+#include <BiquadFilter.h>
 
-#define STATE_SIZE 6
+#define STATE_SIZE   6
 #define CONTROL_SIZE 3
-#define MEASUREMENT_DIM 6
-#define gravity 9.80665f
 
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r, float omega_r);
 
-const float Ixx = 16.57e-6;  // 0.000021 kg·m² (roll)
-const float Iyy = 16.57e-6;  // 0.000021 kg·m² (pitch)
-const float Izz = 29.80e-6;  // 0.000032 kg·m² (yaw)
-const float Ir = 1.02e-7;   // 0.000001 kg·m² (inércia do rotor)
-const float m = 0.04690f;     // 46.9g
-const float L_ARM = 0.060f * 0.70710678f; // 60mm * sin(45°) - braço efetivo para X-quad
-const float SAMPLING_TIME_S = 0.02f; // 20 ms
-const unsigned long LOOP_PERIOD_US = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
-float omega_r = 0;
+// ===== Parametros fisicos do drone (medidos) =====
+const float Ixx   = 16.57e-6f;  // kg·m^2 — inercia roll
+const float Iyy   = 16.57e-6f;  // kg·m^2 — inercia pitch
+const float Izz   = 29.80e-6f;  // kg·m^2 — inercia yaw
+const float Ir    = 1.02e-7f;   // kg·m^2 — inercia do rotor
+const float L_ARM = 0.060f * 0.70710678f; // 60 mm * sin(45°) — braco efetivo em config X
+const float SAMPLING_TIME_S         = USE_ASYNC_SDRE ? 0.005f : 0.0051f;
+const unsigned long LOOP_PERIOD_US  = static_cast<unsigned long>(SAMPLING_TIME_S * 1e6f);
 
-// Coeficientes do motor e hélice (VALORES MEDIDOS - teste_motor_v2)
+// ===== Coeficientes motor + helice (medidos via test/motor_calibration_test.cpp) =====
 
 // helice 45mm
-//const float MOTOR_B_COEFF = 1.77e-8f;   // Coeficiente de empuxo MEDIDO [N/(rad/s)²]
-//const float MAX_RPM = 31086.0f; // RPM medido a 100% duty cycle
+//const float MOTOR_B_COEFF = 1.77e-8f;   // N/(rad/s)^2 — empuxo medido
+//const float MAX_RPM       = 31086.0f;   // RPM @ 100% duty
 
-// helice 55mm
-const float MOTOR_B_COEFF = 2.94e-8f;   // Coeficiente de empuxo MEDIDO [N/(rad/s)²]
-const float MAX_RPM = 26423.0f; // RPM medido a 100% duty cycle
+// helice 55mm (em uso)
+const float MOTOR_B_COEFF = 2.94e-8f;                      // N/(rad/s)^2 — empuxo medido
+const float MAX_RPM       = 26423.0f;                      // RPM @ 100% duty
 
-const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;  // Coeficiente de arrasto (drag): Q = d*ω² [N·m/(rad/s)²] (estimado)
+const float MOTOR_D_COEFF = 0.05f * MOTOR_B_COEFF;         // N·m/(rad/s)^2 — drag (estimado)
+const float MAX_OMEGA     = (MAX_RPM * 2.0f * PI) / 60.0f; // ~2769 rad/s
+const float MAX_THRUST    = MOTOR_B_COEFF * MAX_OMEGA * MAX_OMEGA; // N
 
-const float MAX_OMEGA = (MAX_RPM * 2.0f * PI) / 60.0f; // ~3255.3 rad/s
-const float MAX_THRUST = MOTOR_B_COEFF * MAX_OMEGA * MAX_OMEGA; // Empuxo máximo medido a 100% duty cycle (N)
+float omega_r = 0; // soma signed das velocidades de rotor (acoplamento giroscopico)
 
-// Variáveis para armazenar dados do sensor
-float ax, ay, az;
-float gx, gy, gz;
-float mx, my, mz;
+float ax, ay, az, gx, gy, gz, mx, my, mz; // leituras IMU/mag (rad/s, g, uT)
 
-float rvx = 0, rvy = 0, rvz = 0;
-float evx = 0, evy = 0, evz = 0;
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+// ===== Estado compartilhado entre loop principal e SDRETask (protegido por mutex) =====
+SemaphoreHandle_t matricesMutex;
+TaskHandle_t      sdreTaskHandle;
 
 float Ad[STATE_SIZE * STATE_SIZE];
 float Bd[STATE_SIZE * CONTROL_SIZE];
+float Qd[STATE_SIZE * STATE_SIZE];
+float Rd[CONTROL_SIZE * CONTROL_SIZE];
+float K_shared[CONTROL_SIZE * STATE_SIZE];
+bool  new_K_available = false;
+float state_shared[7]; // roll, pitch, yaw, p, q, r, omega_r
 
-// Matrizes do sistema
+// Timing da SDRETask (escrito pela task, lido no loop em DEBUG_MODE — sem mutex)
+volatile unsigned long sdre_t_updateMatrix = 0;
+volatile unsigned long sdre_t_computeGains = 0;
+volatile unsigned long sdre_t_total        = 0;
+
+// ===== Matrizes do sistema (preenchidas em updateSystemMatrix) =====
 float A[STATE_SIZE * STATE_SIZE] = {
     0, 0, 0, 1, 0, 0,
     0, 0, 0, 0, 1, 0,
@@ -106,15 +103,14 @@ float B[STATE_SIZE * CONTROL_SIZE] = {
     0, 1/Iyy, 0,
     0, 0, 1/Izz
 };
-// Baseando-se em Regra de Bryson
-// usando angulos maximos de 30 grus e valocidades angulares maximas de 1rad/s
-// Qii = 1/(max_estado_i)^2 
-const float roll_max_rad = 45.0f * DEG_TO_RAD;   // Afrouxa um pouco o peso do erro de ângulo (P mais brando)
-const float pitch_max_rad = 45.0f * DEG_TO_RAD;  
-const float yaw_max_rad = 90.0f * DEG_TO_RAD;    
-const float p_max = 30.0f * DEG_TO_RAD; // rad/s (Diminuido para AUMENTAR o peso na matriz Q -> Amortecimento forte)
-const float q_max = 30.0f * DEG_TO_RAD; // rad/s
-const float r_max = 60.0f * DEG_TO_RAD; // rad/s (Yaw geralmente pode ser um pouco menos amortecido)
+// Regra de Bryson sobre envelope realista de voo (nao limites mecanicos):
+// Qii = 1/(max_estado_i)^2. Envelope maior baixa Q_ang e melhora razao P/D.
+const float roll_max_rad  = 45.0f * DEG_TO_RAD;
+const float pitch_max_rad = 45.0f * DEG_TO_RAD;
+const float yaw_max_rad   = 90.0f * DEG_TO_RAD;
+const float p_max         = 300.0f * DEG_TO_RAD;
+const float q_max         = 300.0f * DEG_TO_RAD;
+const float r_max         = 200.0f * DEG_TO_RAD;
 
 const float Q_11 = 1.0f / (roll_max_rad * roll_max_rad);
 const float Q_22 = 1.0f / (pitch_max_rad * pitch_max_rad);
@@ -132,12 +128,12 @@ float Q[STATE_SIZE * STATE_SIZE] = {
     0, 0, 0, 0, 0, Q_66
 };
 
-// Maximos torques físicos (aproximados) do drone:
-const float max_tau_roll = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
-const float max_tau_pitch = 2 * MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
-const float max_tau_yaw = 2 * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA; // ~0.018 N·m
+// Torques fisicos maximos (aproximados) — usados pela regra de Bryson em R:
+const float max_tau_roll  = MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA; // ~0.016 N·m
+const float max_tau_pitch = MOTOR_B_COEFF * L_ARM * MAX_OMEGA * MAX_OMEGA;
+const float max_tau_yaw   = 2.0f * MOTOR_D_COEFF * MAX_OMEGA * MAX_OMEGA;  // ~0.018 N·m
 
-// Regra de Bryson para R: R_ii = 1 / (max_torque_i)^2
+// R_ii = 1 / (max_torque_i)^2
 const float R_11 = 1.0f / (max_tau_roll  * max_tau_roll);
 const float R_22 = 1.0f / (max_tau_pitch * max_tau_pitch);
 const float R_33 = 1.0f / (max_tau_yaw   * max_tau_yaw);
@@ -160,65 +156,59 @@ Adafruit_MPU6050 mpu;
 
 Madgwick filter;
 
-// Variáveis de calibração do MPU6050
-// VALORES DE CALIBRAÇÃO MPU6050 - Cole aqui os valores obtidos do script de calibração
-float accel_offset_x = 0.058127f;
-float accel_offset_y = -0.148659f;
-float accel_offset_z = 0.018737f;
-float gyro_offset_x = -0.007760f;
-float gyro_offset_y = 0.017851f;
-float gyro_offset_z = 0.007761f;
+// Instâncias dos filtros Butterworth
+BiquadFilter bq_ax, bq_ay, bq_az;
+BiquadFilter bq_gx, bq_gy, bq_gz;
 
-// ===== CALIBRAÇÃO DO MAGNETÔMETRO QMC5883L =====
-// Execute test/calibrate_magnetometer.cpp para obter estes valores
-// Hard-Iron Offsets (valores brutos para subtrair)
-const float MAG_OFFSET_X = 26.5f;
+// Nyquist do loop (200 Hz) eh 100 Hz; cutoff abaixo disso evita quebrar o filtro.
+const float perc_cutoff = 0.8f;
+const float SENSOR_CUTOFF_HZ = ((1.0f / SAMPLING_TIME_S)/2.0f) * perc_cutoff;
+
+// ===== Calibracao MPU6050 (obtida via test/calibrate_mpu.cpp) =====
+float accel_offset_x =  0.058127f;
+float accel_offset_y = -0.148659f;
+float accel_offset_z =  0.018737f;
+float gyro_offset_x  = -0.007760f;
+float gyro_offset_y  =  0.017851f;
+float gyro_offset_z  =  0.007761f;
+
+// ===== Calibracao QMC5883L (obtida via test/calibrate_magnetometer.cpp) =====
+const float MAG_OFFSET_X =  26.5f;   // Hard-iron
 const float MAG_OFFSET_Y = 221.5f;
 const float MAG_OFFSET_Z = -72.5f;
-// Soft-Iron Scales (fatores de escala)
-const float MAG_SCALE_X = 1.0243f;
+const float MAG_SCALE_X = 1.0243f;   // Soft-iron
 const float MAG_SCALE_Y = 0.9575f;
 const float MAG_SCALE_Z = 1.0210f;
-// ===============================================
 
-// Instância do controlador de motores
 MotorControl motors;
+LEDControl   leds;
+WiFiComm     wifiComm("ESP-DRONE", "12345678", 2390);
+Telemetry    telemetry; // ~68 KB em RAM (1000 amostras x 68 B)
 
-// Instância do controle de LEDs e bateria
-LEDControl leds;
-
-// Instância da comunicação WiFi
-WiFiComm wifiComm("ESP-DRONE", "12345678", 2390);
-
-// Buffer de telemetria em RAM (CAPACITY=1000 amostras = ~20s @ 50Hz)
-Telemetry telemetry;
-
-// Variáveis de controle remoto
-bool remote_control_enabled = false;
+bool            remote_control_enabled = false;
 CommanderPacket remote_command;
 
-// Flags de segurança
-bool enable_motors = false; // Será ativado quando controle conectar
-bool motors_armed_by_remote = false; // Indica se motores foram armados pelo controle
-bool skip_timing_sample = false; // Ignora amostra de tempo durante armamento
-bool tilt_failsafe_latched = false; // Trava de segurança por inclinacao excessiva (so libera com reset)
+// Flags de seguranca
+bool enable_motors          = false; // Ativado quando controle conecta
+bool motors_armed_by_remote = false; // True apos primeiro comando recebido
+bool skip_timing_sample     = false; // Ignora 1 amostra de tempo durante armamento
+bool tilt_failsafe_latched  = false; // So libera com reset fisico do drone
 
-// B6: failsafe a 60° (antes 80°). Evita zona singular 1/cos(pitch) onde Ad explode.
+// Failsafe de tilt: 60° evita zona singular 1/cos(pitch) onde Ad explode.
 const float MAX_SAFE_TILT_DEG = 60.0f;
 const float MAX_SAFE_TILT_RAD = MAX_SAFE_TILT_DEG * DEG_TO_RAD;
 
-// Callbacks para comunicação WiFi
-float initial_yaw = 0.0f;
+float initial_yaw = 0.0f; // travado no setup() para referencia relativa
+
+// ===== Callbacks WiFi =====
 
 void onRemoteCommandReceived(CommanderPacket cmd) {
-    if (tilt_failsafe_latched) {
-        return;
-    }
+    if (tilt_failsafe_latched) return;
 
     remote_command = cmd;
     remote_control_enabled = true;
-    
-    // Arma os motores na primeira vez que receber comando
+
+    // Arma na primeira mensagem recebida
     if (!motors_armed_by_remote && !motors.isArmed()) {
         skip_timing_sample = true;
         motors.armMotors();
@@ -238,49 +228,77 @@ void onClientConnected() {
     }
 
     Serial.println("🎮 Controle remoto CONECTADO!");
-    remote_control_enabled = false; // Aguarda primeiro comando
-    enable_motors = true; // Habilita sistema de motores
-    
-    // Atualiza LEDs
-    leds.setSystemReady(true); // Sistema pronto: LED azul piscando
+    remote_control_enabled = false; // aguarda primeiro comando
+    enable_motors = true;
+    leds.setSystemReady(true);
 }
 
 void onClientDisconnected() {
-    Serial.println("\n🔴🔴🔴 EVENTO: onClientDisconnected() CHAMADO! 🔴🔴🔴");
-    Serial.println("🎮 Controle remoto DESCONECTADO!");
+    Serial.println("\n🔴 Controle remoto DESCONECTADO");
     remote_control_enabled = false;
-    enable_motors = false; // Desabilita motores por segurança
+    enable_motors = false;
     motors_armed_by_remote = false;
-    
-    // Para todos os motores imediatamente
+
     motors.stopAllMotors();
     telemetry.saveToFile();
 
-    // Zera comandos por segurança
-    remote_command.roll = 0;
-    remote_command.pitch = 0;
-    remote_command.yaw = 0;
-    remote_command.thrust = 0;
-    
-    // Atualiza LEDs
-    leds.setSystemReady(false); // Sistema não está pronto
-    leds.setUDPReceiving(false); // Não está recebendo UDP
-    
+    remote_command = {0};
+
+    leds.setSystemReady(false);
+    leds.setUDPReceiving(false);
+
     Serial.println("⚠️  Motores DESARMADOS por segurança!");
 }
 
-void setup()
-{
-    // Desabilita o detector de brownout para evitar reset com queda de tensão da bateria
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+// ===== Task FreeRTOS: recalcula Ad,Bd,Qd,Rd e resolve a DARE em paralelo ao loop =====
+// Loop principal apenas le K_shared (sob mutex) — assim a Riccati (~5–10 ms) nao
+// trava o ciclo de 5 ms dos sensores/motores. Stack grande pois SDA aloca matrizes.
+void sdreTaskCode(void * parameter) {
+    for (;;) {
+        if (CONTROLLER_TYPE == 0) {
+            float local_state[7];
+            xSemaphoreTake(matricesMutex, portMAX_DELAY);
+            memcpy(local_state, state_shared, sizeof(local_state));
+            xSemaphoreGive(matricesMutex);
+
+            unsigned long t0 = micros();
+            updateSystemMatrix(local_state[0], local_state[1], local_state[2],
+                               local_state[3], local_state[4], local_state[5],
+                               local_state[6]);
+            unsigned long t1 = micros();
+            sdreController.computeGains();
+            unsigned long t2 = micros();
+
+            sdre_t_updateMatrix = t1 - t0;
+            sdre_t_computeGains = t2 - t1;
+            sdre_t_total        = t2 - t0;
+
+            xSemaphoreTake(matricesMutex, portMAX_DELAY);
+            sdreController.exportGains(K_shared);
+            new_K_available = true;
+            xSemaphoreGive(matricesMutex);
+        }
+        // Sem vTaskDelay: roda a maxima frequencia possivel no tempo ocioso
+        // que o loop principal libera via vTaskDelay no final do seu ciclo.
+    }
+}
+
+void setup() {
+    // Mutex deve existir antes de qualquer xSemaphoreTake (evita assert fail em pxQueue)
+    matricesMutex = xSemaphoreCreateMutex();
+
+    if (USE_ASYNC_SDRE) {
+        // Prioridade 0 (loop do Arduino roda em prio 1 — fica em background).
+        // Stack 16 KB: SDA aloca varias matrizes temporarias 6x6.
+        xTaskCreate(sdreTaskCode, "SDRETask", 16384, NULL, 0, &sdreTaskHandle);
+    }
 
     Serial.begin(115200);
     delay(1000);
 
-    // ===== Persistencia de telemetria em flash =====
-    // ESP32 reseta quando Serial Monitor abre, entao salvamos buffer em LittleFS
-    // ao desarmar e recarregamos no boot pra ficar disponivel apos reset.
-    if (LittleFS.begin(true)) {  // true = formata se montagem falhar
+    // Persistencia de telemetria: ESP32 reseta quando o Serial Monitor abre, entao
+    // salvamos o buffer em LittleFS ao desarmar e recarregamos no boot.
+    if (LittleFS.begin(true)) {
         if (telemetry.loadFromFile()) {
             Serial.printf(">> Telemetria anterior carregada: %u amostras\n",
                           (unsigned)telemetry.size());
@@ -291,89 +309,90 @@ void setup()
         Serial.println("!! Falha ao montar LittleFS - telemetria nao sera persistida.");
     }
 
-    // Inicializa o sistema de LEDs e bateria
+    // ===== Bateria =====
     leds.begin();
-    // LED branco acende automaticamente (hardware) quando há energia
-    
-    // Verifica bateria antes de continuar
+
     if (leds.isCriticalBattery()) {
         Serial.println("❌ BATERIA CRÍTICA! Sistema não iniciará.");
-        Serial.printf("   Tensão atual: %.2fV (mínimo: %.2fV)\n", 
-                     leds.getBatteryVoltage(), BATTERY_CRITICAL_VOLTAGE);
-        leds.setLowPower(true); // LED vermelho aceso
-        while(1) {
+        Serial.printf("   Tensão atual: %.2fV (mínimo: %.2fV)\n",
+                      leds.getBatteryVoltage(), BATTERY_CRITICAL_VOLTAGE);
+        leds.setLowPower(true);
+        while (1) {
             leds.update();
             delay(100);
         }
     }
-    
+
     if (leds.isLowBattery()) {
         Serial.println("⚠️  AVISO: Bateria baixa!");
         Serial.printf("   Tensão atual: %.2fV\n", leds.getBatteryVoltage());
-        leds.setLowPower(true); // LED vermelho aceso
+        leds.setLowPower(true);
     }
 
-    // Inicialização dos sensores
-    leds.setSensorsCalibration(true); // LED azul piscando lentamente
-    
-    Serial.println("Usando MPU6050 (sem BMP280)");
+    // ===== Sensores =====
+    leds.setSensorsCalibration(true);
+
+    Serial.println("Usando MPU6050");
     start_IMU_MPU6050(mpu);
-    
-    // Inicializa o magnetômetro QMC5883L no barramento I2C (se habilitado)
+
     if (USE_MAGNETOMETER) {
         Serial.println("Inicializando QMC5883L (Magnetômetro)...");
         start_QMC5883L(Wire);
-        
-        // Configura calibração do magnetômetro (valores obtidos de test/calibrate_magnetometer.cpp)
         setQMC5883LCalibration(MAG_OFFSET_X, MAG_OFFSET_Y, MAG_OFFSET_Z,
                                MAG_SCALE_X, MAG_SCALE_Y, MAG_SCALE_Z);
     } else {
         Serial.println("⚠️  Magnetômetro DESABILITADO - usando apenas Accel+Gyro (6-DOF)");
     }
-    
-    leds.setSensorsCalibration(false); // Calibração concluída
 
-    // Discretiza a matriz B
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            Bd[i * CONTROL_SIZE + j] = B[i * CONTROL_SIZE + j] * SAMPLING_TIME_S;
-        }
+    leds.setSensorsCalibration(false);
+
+    // ===== Filtros Butterworth (anti-aliasing digital para Madgwick) =====
+    const float fs = 1.0f / SAMPLING_TIME_S; // 200 Hz
+    bq_ax.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_ay.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_az.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gx.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gy.begin(SENSOR_CUTOFF_HZ, fs);
+    bq_gz.begin(SENSOR_CUTOFF_HZ, fs);
+
+    // Primeira chamada de updateSystemMatrix em x=0 — discretiza A,B,Q,R e
+    // propaga para o controlador SDRE.
+    updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+
+    // Sincrono reordenado: o controle usa o K do ciclo ANTERIOR, entao K_shared
+    // precisa ser valido antes do 1o ciclo. Calcula um ganho inicial em x=0.
+    // (No async, a SDRETask preenche K_shared em background.)
+    if (CONTROLLER_TYPE == 0 && !USE_ASYNC_SDRE) {
+        sdreController.computeGains();
+        sdreController.exportGains(K_shared);
     }
 
-    // Inicializa o controlador baseado no tipo selecionado
-    updateSystemMatrix(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    
     if (CONTROLLER_TYPE == 0) {
-        // SDRE Controller
         Serial.println("🎯 Controlador: SDRE (State-Dependent Riccati Equation)");
-        sdreController.setInputMatrix(Bd);
-        sdreController.setCostMatrices(Q, R);
     } else {
-        // PID Controller
         Serial.println("🎯 Controlador: PID (Proportional-Integral-Derivative)");
-        // Configurar ganhos PID (ajustar conforme necessário)
         pidController.setRollGains(0.05f, 0.05f, 0.0f);
         pidController.setPitchGains(0.05f, 0.05f, 0.0f);
         pidController.setYawGains(0.01f, 0.0f, 0.0f);
-
-
         pidController.setIntegralLimits(1.0f, 1.0f, 0.5f);
-        // B3: clamp torque ao máximo físico (max_tau_roll ≈ 0.016 N·m); roll é o eixo mais apertado
+        // Clamp ao maximo fisico: roll/pitch sao os eixos mais apertados (~0.016 N·m)
         pidController.setOutputLimits(-max_tau_roll, max_tau_roll);
         pidController.setSamplingTime(SAMPLING_TIME_S);
     }
 
     filter.begin(1.0f / SAMPLING_TIME_S);
-    
-    Serial.println("Stabilizing filter to get initial Yaw...");
-    // Ler os sensores algumas vezes para descartar leituras iniciais instáveis
+
+    Serial.println("Estabilizando filtro para travar o Yaw inicial...");
     for (int i = 0; i < 10; i++) {
-        read_MPU6050(mpu, ax, ay, az, gx, gy, gz, accel_offset_x, accel_offset_y, accel_offset_z, gyro_offset_x, gyro_offset_y, gyro_offset_z);
+        read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
+                     accel_offset_x, accel_offset_y, accel_offset_z,
+                     gyro_offset_x, gyro_offset_y, gyro_offset_z);
         if (USE_MAGNETOMETER) read_QMC5883L(mx, my, mz);
         delay(10);
     }
-    
-    // Acelerar a convergência do quaternion passando as leituras estáticas várias vezes (com gyro=0)
+
+    // Convergencia do quaternion com gyro=0 (drone parado): 100k iteracoes
+    // garantem que o Madgwick esteja em regime antes de travar initial_yaw.
     for (int i = 0; i < 100000; i++) {
         if (USE_MAGNETOMETER) {
             filter.update(0.0f, 0.0f, 0.0f, ax, ay, az, mx, my, mz);
@@ -381,37 +400,33 @@ void setup()
             filter.updateIMU(0.0f, 0.0f, 0.0f, ax, ay, az);
         }
     }
-    
-    initial_yaw = filter.getYawRadians();
-    Serial.printf("Initial Yaw locked at: %.2f degrees\n", initial_yaw * RAD_TO_DEG);
 
-    // Inicializa o sistema de controle de motores
+    initial_yaw = filter.getYawRadians();
+    Serial.printf("Yaw inicial travado em: %.2f deg\n", initial_yaw * RAD_TO_DEG);
+
+    // ===== Motores =====
     motors.begin();
-    motors.setThrottleLimits(8, 100); // B5: piso 8% (idle em voo) - evita motor parar em transientes
-    // Motor max: 50000 RPM = 5236 rad/s → ω² = 27.4M rad²/s²
-    motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA); // Limite superior de omega² para 31k RPM (medido)
-    
-    // Descomentar para calibrar ESCs (fazer apenas uma vez)
+    motors.setThrottleLimits(0, 100); // Sem piso: motor para de vez (clamp simetrico no diferencial)
+    motors.setOmegaSqLimits(0, MAX_OMEGA * MAX_OMEGA);
+
+    // Calibracao de ESC: descomentar uma unica vez (consultar docs/MOTOR_CALIBRATION_GUIDE.md)
     // motors.calibrateESCs();
-    
-    // NÃO armar motores aqui - eles serão armados quando o controle conectar
+
     Serial.println("⏸️  Motores em standby - aguardando controle remoto...");
-    
-    // Inicializa comunicação WiFi
-    wifiComm.enableDebug(false);  // Ativa mensagens de debug
-    wifiComm.enableVerbose(false); // Desativa mensagens detalhadas (pode ativar para debug)
-    
+
+    // ===== WiFi/UDP =====
+    wifiComm.enableDebug(false);
+    wifiComm.enableVerbose(false);
+
     if (wifiComm.begin()) {
         Serial.println("✅ WiFi/UDP iniciado com sucesso!");
-        
-        // Configura callbacks
         wifiComm.onCommandReceived(onRemoteCommandReceived);
         wifiComm.onClientConnected(onClientConnected);
         wifiComm.onClientDisconnected(onClientDisconnected);
     } else {
         Serial.println("❌ Falha ao iniciar WiFi/UDP!");
     }
-    
+
     Serial.println("Sistema inicializado com sucesso!");
     Serial.println("--------------------------------------------------");
 }
@@ -422,71 +437,65 @@ void loop(){
     // ===== PROFILING: Tempos parciais =====
     unsigned long t_leds, t_battery, t_wifi, t_mpu, t_mag, t_filter, t_angles, t_matrix, t_lqr, t_control_logic, t_motor_calc, t_motor_set;
     unsigned long t_checkpoint = micros();
-    
-    // Atualiza sistema de LEDs
+
+    // ----- LEDs + bateria -----
     leds.update();
     t_leds = micros() - t_checkpoint;
     t_checkpoint = micros();
-    
-    // Verifica bateria crítica - apenas atualiza LED (não desarma motores)
-    if (leds.isCriticalBattery()) {
-        leds.setLowPower(true);
-    } else if (leds.isLowBattery()) {
-        leds.setLowPower(true);
-    } else {
-        leds.setLowPower(false);
-    }
+
+    // Bateria critica/baixa apenas acende LED — nao desarma motores em voo
+    leds.setLowPower(leds.isCriticalBattery() || leds.isLowBattery());
     t_battery = micros() - t_checkpoint;
     t_checkpoint = micros();
-    
-    // Atualiza comunicação WiFi
+
+    // ----- WiFi/UDP -----
     wifiComm.update();
     t_wifi = micros() - t_checkpoint;
     t_checkpoint = micros();
-    
-    // Atualiza LED de recepção UDP
-    if (tilt_failsafe_latched) {
-        leds.setUDPReceiving(false);
-    } else if (wifiComm.isClientConnected()) {
-        leds.setUDPReceiving(true);
-    } else {
-        leds.setUDPReceiving(false);
-    }
 
-    // Leitura do sensor selecionado
-    read_MPU6050(mpu, ax, ay, az, gx, gy, gz,
-                 accel_offset_x, accel_offset_y, accel_offset_z,
-                 gyro_offset_x, gyro_offset_y, gyro_offset_z);
+    leds.setUDPReceiving(!tilt_failsafe_latched && wifiComm.isClientConnected());
+
+    // ----- Sensores + Butterworth -----
+    // Leitura crua (burst read via Wire): ~1.8x mais rapida que mpu.getEvent() da
+    // Adafruit, com escalas identicas. Init/config continua pela lib (start_IMU_MPU6050).
+    read_MPU6050_raw(ax, ay, az, gx, gy, gz,
+                     accel_offset_x, accel_offset_y, accel_offset_z,
+                     gyro_offset_x, gyro_offset_y, gyro_offset_z);
+
+    ax = bq_ax.update(ax);
+    ay = bq_ay.update(ay);
+    az = bq_az.update(az);
+    gx = bq_gx.update(gx);
+    gy = bq_gy.update(gy);
+    gz = bq_gz.update(gz);
+
     t_mpu = micros() - t_checkpoint;
     t_checkpoint = micros();
-    
-    // Lê o magnetômetro QMC5883L (se habilitado)
+
+    // ----- Magnetometro (se habilitado) + Madgwick -----
+    // Adafruit_MPU6050 retorna gyro em rad/s; Madgwick espera deg/s.
     if (USE_MAGNETOMETER) {
         read_QMC5883L(mx, my, mz);
         t_mag = micros() - t_checkpoint;
         t_checkpoint = micros();
-        // Adafruit MPU6050 retorna rad/s, Madgwick espera graus/s
-        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+        filter.update(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG,
                       ax, ay, az, mx, my, mz);
     } else {
         t_mag = 0;
-        // Usa apenas accel+gyro (6-DOF) - sem magnetômetro
-        filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, 
+        filter.updateIMU(gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG,
                          ax, ay, az);
     }
     t_filter = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    // Obtém os ângulos de Euler
-    float roll = filter.getRollRadians();
+    // ----- Angulos de Euler (yaw relativo ao initial_yaw, normalizado em [-π,π]) -----
+    float roll  = filter.getRollRadians();
     float pitch = filter.getPitchRadians();
-    float yaw = filter.getYawRadians() - initial_yaw;
-
-    // Normaliza o yaw para o intervalo [-PI, PI]
-    while (yaw > PI) yaw -= 2.0f * PI;
+    float yaw   = filter.getYawRadians() - initial_yaw;
+    while (yaw >  PI) yaw -= 2.0f * PI;
     while (yaw < -PI) yaw += 2.0f * PI;
 
-    // Failsafe: desliga e trava motores se inclinacao exceder MAX_SAFE_TILT_DEG (60°)
+    // ----- Failsafe de tilt (so reseta com reboot) -----
     if (!tilt_failsafe_latched &&
         (fabsf(roll) > MAX_SAFE_TILT_RAD || fabsf(pitch) > MAX_SAFE_TILT_RAD)) {
         tilt_failsafe_latched = true;
@@ -494,103 +503,105 @@ void loop(){
         enable_motors = false;
         motors_armed_by_remote = false;
 
-        // Para motores imediatamente
         motors.stopAllMotors();
         telemetry.saveToFile();
 
-        // Zera comandos por seguranca
-        remote_command.roll = 0;
-        remote_command.pitch = 0;
-        remote_command.yaw = 0;
-        remote_command.thrust = 0;
+        remote_command = {0};
 
-        // Atualiza status visual
         leds.setSystemReady(false);
         leds.setUDPReceiving(false);
 
         Serial.println("\n🚨 FAILSAFE: inclinacao acima de 60 graus detectada!");
-        Serial.printf("   Roll: %.2f deg | Pitch: %.2f deg\n", roll * RAD_TO_DEG, pitch * RAD_TO_DEG);
+        Serial.printf("   Roll: %.2f deg | Pitch: %.2f deg\n",
+                      roll * RAD_TO_DEG, pitch * RAD_TO_DEG);
         Serial.println("   Motores desligados. Reinicie o drone para rearmar.");
     }
 
-    float p = gx;
-    float q = gy;
-    float r = gz;
-
+    float p = gx, q = gy, r = gz;
     float z_measurement[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
     t_angles = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
-    t_matrix = micros() - t_checkpoint;
-    t_checkpoint = micros();
+    // ----- SDRE: publica estado para a task assincrona OU calcula sincronamente -----
+    if (USE_ASYNC_SDRE) {
+        xSemaphoreTake(matricesMutex, portMAX_DELAY);
+        state_shared[0] = roll;  state_shared[1] = pitch; state_shared[2] = yaw;
+        state_shared[3] = p;     state_shared[4] = q;     state_shared[5] = r;
+        state_shared[6] = omega_r;
+        xSemaphoreGive(matricesMutex);
 
-    // Calcula os ganhos ótimos (somente para SDRE)
-    if (CONTROLLER_TYPE == 0) {
-        sdreController.computeGains();
+        t_matrix = micros() - t_checkpoint;
+        t_checkpoint = micros();
+        t_lqr    = 0; // computado na SDRETask
+    } else {
+        // SINCRONO REORDENADO: o SDRE NAO roda aqui. Se rodasse, ficaria no caminho
+        // sensor->atuador, somando ~4ms de atraso de transporte -> oscilacao. O controle
+        // abaixo usa o K do ciclo ANTERIOR (ja em K_shared); o novo K e calculado ao FINAL
+        // do loop (apos aplicar os motores), com latencia de atuacao ~0 (como no async).
+        t_matrix = micros() - t_checkpoint;
+        t_checkpoint = micros();
+        t_lqr = 0;
     }
-    t_lqr = micros() - t_checkpoint;
-    t_checkpoint = micros();
 
-    // ===== LÓGICA DE CONTROLE =====
-    float phi_desired, theta_desired, yaw_desired, thrust;
-    
+    // ----- Logica de controle: extrai setpoint do comando remoto -----
+    float phi_desired = 0, theta_desired = 0, yaw_desired = 0, thrust = 0;
+
     if (remote_control_enabled && wifiComm.isClientConnected()) {
-        
-        phi_desired = remote_command.roll * DEG_TO_RAD;
+        phi_desired   = remote_command.roll  * DEG_TO_RAD;
         theta_desired = remote_command.pitch * DEG_TO_RAD;
-        yaw_desired = remote_command.yaw * DEG_TO_RAD;
+        yaw_desired   = remote_command.yaw   * DEG_TO_RAD;
 
-        // B2: desnormaliza yaw_desired ao redor de yaw atual (erro em [-π,π]).
-        // Sem isso, SDRE faz x[2]-r[2] linear → gira pela rota longa em setpoints grandes.
+        // Desnormaliza yaw_desired ao redor do yaw atual (erro em [-π,π]). Sem isso,
+        // SDRE faz x[2]-r[2] linear e o drone gira pela rota longa em setpoints grandes.
         float yaw_err = yaw_desired - yaw;
-        while (yaw_err > PI) yaw_err -= 2.0f * PI;
+        while (yaw_err >  PI) yaw_err -= 2.0f * PI;
         while (yaw_err < -PI) yaw_err += 2.0f * PI;
         yaw_desired = yaw + yaw_err;
 
-        thrust = (remote_command.thrust / 65000.0f) * MAX_THRUST * 4; // 4 motores
-    } else {
-        evx = rvx - 0;
-        evy = rvy - 0;
-        evz = rvz - 0;
-
-        theta_desired = 0;
-        phi_desired = 0;
-        yaw_desired = 0;
-        thrust = 0;
+        thrust = (remote_command.thrust / 65000.0f) * MAX_THRUST * 4.0f; // soma dos 4 motores
     }
     t_control_logic = micros() - t_checkpoint;
     t_checkpoint = micros();
 
     float x[STATE_SIZE] = {roll, pitch, yaw, p, q, r};
-    float ref[3] = {phi_desired, theta_desired, yaw_desired};
+    float ref[3]        = {phi_desired, theta_desired, yaw_desired};
     float u[CONTROL_SIZE];
 
-    // Calcula controle baseado no tipo de controlador selecionado
     if (CONTROLLER_TYPE == 0) {
-        // SDRE Controller
-        sdreController.updateState(x);
-        sdreController.updateReference(ref);
-        sdreController.calculateControl(u);
+        // u = -K*x + Kr*ref, com Kr = -K[:,:CONTROL_SIZE] (compensacao de regime estacionario)
+        memset(u, 0, CONTROL_SIZE * sizeof(float));
+
+        xSemaphoreTake(matricesMutex, portMAX_DELAY);
+        float K_local[CONTROL_SIZE * STATE_SIZE];
+        memcpy(K_local, K_shared, sizeof(K_local));
+        xSemaphoreGive(matricesMutex);
+
+        for (int i = 0; i < CONTROL_SIZE; i++) {
+            for (int j = 0; j < STATE_SIZE; j++) {
+                u[i] -= K_local[i * STATE_SIZE + j] * x[j];
+                if (j < CONTROL_SIZE) {
+                    u[i] += (-K_local[i * STATE_SIZE + j]) * ref[j];
+                }
+            }
+        }
     } else {
-        // PID Controller
         pidController.updateState(x);
         pidController.updateReference(ref);
         pidController.calculateControl(u);
     }
 
-    // ===== CÁLCULO DOS OMEGA QUADRADOS =====
+    // ----- Alocacao de torques -> omega^2 dos 4 motores -----
     float w1_sq, w2_sq, w3_sq, w4_sq;
     calculateMotorOmegaSq(thrust, u, MOTOR_B_COEFF, MOTOR_D_COEFF, L_ARM,
                           w1_sq, w2_sq, w3_sq, w4_sq);
-    // Atualiza omega_r para a próxima iteração (acoplamento giroscópico, Ir desprezível):
-    // Motores CW: 1 (FR) e 3 (RL) | Motores CCW: 2 (RR) e 4 (FL)
-    // Convenção sign_i = +1 para CCW, -1 para CW (Σ sign_i · ω_i):
+
+    // Acoplamento giroscopico (Ir << I): sign_i = +1 CCW, -1 CW. Σ sign_i · ω_i.
+    // M1 (FR, CW), M2 (RR, CCW), M3 (RL, CW), M4 (FL, CCW).
     omega_r = -sqrtf(w1_sq) + sqrtf(w2_sq) - sqrtf(w3_sq) + sqrtf(w4_sq);
     t_motor_calc = micros() - t_checkpoint;
     t_checkpoint = micros();
 
-    // ===== CONTROLE DE MOTORES =====
+    // ----- Aplica nos motores -----
     if (enable_motors && motors.isArmed()) {
         motors.setMotorsFromOmegaSq(w1_sq, w2_sq, w3_sq, w4_sq);
     } else {
@@ -598,53 +609,70 @@ void loop(){
     }
     t_motor_set = micros() - t_checkpoint;
 
-    // ===== TELEMETRIA EM RAM (apenas quando armado) =====
-    // Custo: ~1 us (apenas escritas em RAM, sem printf nem I/O).
+    // ----- SINCRONO: calcula o SDRE para o PROXIMO ciclo, FORA do caminho de atuacao -----
+    // Os motores ja foram aplicados acima com o K do ciclo anterior, entao o tempo da
+    // Riccati (~3.7ms) nao atrasa a atuacao — mesmo padrao de latencia do async.
+    // (Em sync a SDRETask nao existe, entao escreve K_shared direto sem mutex.)
+    if (!USE_ASYNC_SDRE && CONTROLLER_TYPE == 0) {
+        unsigned long t_start = micros();
+        updateSystemMatrix(roll, pitch, yaw, p, q, r, omega_r);
+        sdre_t_updateMatrix = micros() - t_start;
+
+        t_start = micros();
+        sdreController.computeGains();
+        sdreController.exportGains(K_shared);
+        sdre_t_computeGains = micros() - t_start;
+        t_lqr = sdre_t_updateMatrix + sdre_t_computeGains;  // telemetria
+    }
+
+    // ----- Telemetria em RAM (somente quando armado) -----
+    // Custo: ~1 us — apenas escritas em RAM, sem printf nem I/O.
     if (motors.isArmed()) {
+        // Referencia EFETIVA que o drone segue: como Kr = -K[:,:3], a malha rastreia
+        // x_ang -> -phi_desired. Salvamos o negativo para o grafico casar com o angulo
+        // medido (roll/pitch/yaw). Apenas telemetria — nao afeta o controle.
         telemetry.log(millis(),
                       roll, pitch, yaw,
+                      -phi_desired, -theta_desired, -yaw_desired,
                       p, q, r,
                       u[0], u[1], u[2],
                       w1_sq, w2_sq, w3_sq, w4_sq);
     } else {
-        // Drone parado: poll comando de dump via Serial.
-        // 'D' ou 'd' -> imprime CSV de toda telemetria capturada.
-        // 'R' ou 'r' -> reseta buffer.
-        // So roda quando desarmado, nao afeta o loop de controle.
+        // Desarmado: aceita comandos serial — 'D' dump CSV, 'R' reset buffer.
         if (Serial.available()) {
             char c = Serial.read();
             if (c == 'D' || c == 'd') {
                 telemetry.dumpCSV(Serial);
             } else if (c == 'R' || c == 'r') {
                 telemetry.reset();
-                telemetry.saveToFile(); // persiste reset no flash — evita restaurar dados antigos no boot
+                telemetry.saveToFile(); // persiste reset (evita restaurar dados antigos no boot)
                 Serial.println(">> Buffer de telemetria resetado.");
             }
         }
     }
 
-    // Tempo de processamento
+    // ----- Mantem periodo de amostragem exato (5 ms) -----
     unsigned long processingTime = micros() - startTime;
-    
-    // Força o loop a rodar exatamente no período de amostragem configurado
+
     if (processingTime < LOOP_PERIOD_US) {
-        delayMicroseconds(LOOP_PERIOD_US - processingTime);
+        unsigned long timeLeft = LOOP_PERIOD_US - processingTime;
+        // Cede CPU para SDRETask em granularidade de ms…
+        vTaskDelay(timeLeft / 1000);
+        // …e finaliza com busy-wait para o periodo exato em us.
+        while (micros() - startTime < LOOP_PERIOD_US) { /* spin */ }
     }
-    
-    // Tempo total de execução do loop (deve ser ~12000 μs)
+
     unsigned long loopTime = micros() - startTime;
-    
-    // Estatísticas
+
+    // ----- Estatisticas de timing -----
     static unsigned long maxTime = 0;
     static unsigned long totalTime = 0;
     static unsigned long loopCount = 0;
     static unsigned long prev_ms = 0;
-    static unsigned long last_print_time = 0;  // Tempo que os prints custaram na última vez
+    static unsigned long last_print_time = 0; // custo dos prints do ultimo ciclo de debug
 
     bool skipThisSample = skip_timing_sample;
-    if (skipThisSample) {
-        skip_timing_sample = false;
-    }
+    if (skipThisSample) skip_timing_sample = false;
 
     bool newMaxTime = false;
     if (!skipThisSample) {
@@ -703,6 +731,13 @@ void loop(){
             Serial.printf("   Tempo_Processamento: %lu μs\n", processingTime);
             Serial.printf("   Tempo_Maximo: %lu μs\n", maxTime);
             Serial.printf("   Tempo_Medio: %.2f μs\n", avgTime);
+
+            if (CONTROLLER_TYPE == 0) {
+                Serial.println("\n⚙️  SDRE TASK (fora do loop de 5ms):");
+                Serial.printf("   updateSystemMatrix: %4lu μs\n", sdre_t_updateMatrix);
+                Serial.printf("   computeGains (DARE): %4lu μs\n", sdre_t_computeGains);
+                Serial.printf("   Total SDRE:          %4lu μs  (rodando a ~20 Hz em task separada)\n", sdre_t_total);
+            }
             
             // Status de controle
             if (tilt_failsafe_latched) {
@@ -846,82 +881,159 @@ void loop(){
     }
 }
 
+// Atualiza A(x), B, Q, R e suas versoes discretizadas Ad,Bd,Qd,Rd a partir do
+// estado atual (modelo SDRE de atitude do quadricoptero, configuracao X-quad).
+//
+// Versao esparsa: A tem 11 nao-nulos; B tem 3 nao-nulos (B[3,0]=1/Ixx,
+// B[4,1]=1/Iyy, B[5,2]=1/Izz); Q diagonal. Ad/Bd/Qd sao montados diretamente
+// pelas formulas analiticas (Taylor 2a/3a ordem em dt), evitando ~700 muls
+// que matrixMultiply generico custaria.
 void updateSystemMatrix(float roll, float pitch, float yaw, float p, float q, float r, float omega_r) {
-    // Atualiza a matriz A contínua com as velocidades angulares atuais
-    // As três primeiras linhas permanecem constantes
 
-    float alpha_1 = 1.0f;
-    float alpha_2 = 0.0f;
-    float alpha_3 = 0.0f;      
+    static const float inv_Ixx          = 1.0f / Ixx;
+    static const float inv_Iyy          = 1.0f / Iyy;
+    static const float inv_Izz          = 1.0f / Izz;
+    static const float Iyy_Izz_over_Ixx = (Iyy - Izz) / Ixx;
+    static const float Izz_Ixx_over_Iyy = (Izz - Ixx) / Iyy;
+    static const float Ixx_Iyy_over_Izz = (Ixx - Iyy) / Izz;
+    static const float Ir_over_Ixx      = Ir / Ixx;
+    static const float Ir_over_Iyy      = Ir / Iyy;
+    static const float dt               = SAMPLING_TIME_S;
+    static const float dt2_2            = dt * dt * 0.5f;
 
-    float sin_roll = sin(roll);
-    float cos_roll = cos(roll);
-    float cos_pitch = cos(pitch);
-    float tan_pitch = tan(pitch);
-    float inv_cos_pitch = 1.0f / cos_pitch;
-    
-    A[0 * STATE_SIZE + 3] = 1;
-    A[0 * STATE_SIZE + 4] = sin_roll * tan_pitch;
-    A[0 * STATE_SIZE + 5] = cos_roll * tan_pitch;
+    float sR, cR, sP, cP;
+    sincosf(roll,  &sR, &cR);
+    sincosf(pitch, &sP, &cP);
+    const float inv_cP = 1.0f / cP;
+    const float tP     = sP * inv_cP;
 
-    A[1 * STATE_SIZE + 4] = cos_roll;
-    A[1 * STATE_SIZE + 5] = -sin_roll;
+    // 11 entradas nao-nulas de A.
+    const float A03 = 1.0f;
+    const float A04 = sR * tP;
+    const float A05 = cR * tP;
+    const float A14 = cR;
+    const float A15 = -sR;
+    const float A24 = sR * inv_cP;
+    const float A25 = cR * inv_cP;
+    const float A34 = Iyy_Izz_over_Ixx * r - Ir_over_Ixx * omega_r;
+    const float A43 = Ir_over_Iyy * omega_r;
+    const float A45 = Izz_Ixx_over_Iyy * p;
+    const float A54 = Ixx_Iyy_over_Izz * p;
 
-    A[2 * STATE_SIZE + 4] = sin_roll * inv_cos_pitch;
-    A[2 * STATE_SIZE + 5] = cos_roll * inv_cos_pitch;
-    
-    // Linha 4 (índice 3)
-    A[3 * STATE_SIZE + 4] = alpha_1 * ((Iyy - Izz) / Ixx) * r - Ir * omega_r / Ixx;
-    A[3 * STATE_SIZE + 5] = (1 - alpha_1) * ((Iyy - Izz) / Ixx) * q;
-    
-    // Linha 5 (índice 4)
-    A[4 * STATE_SIZE + 3] = alpha_2 * ((Izz - Ixx) / Iyy) * r + Ir * omega_r / Iyy;
-    A[4 * STATE_SIZE + 5] = (1 - alpha_2) * ((Izz - Ixx) / Iyy) * p;
-    
-    // Linha 6 (índice 5)
-    A[5 * STATE_SIZE + 3] = alpha_3 * ((Ixx - Iyy) / Izz) * q;
-    A[5 * STATE_SIZE + 4] = (1 - alpha_3) * ((Ixx - Iyy) / Izz) * p;
-    
-    // Discretiza a matriz A atualizada
-    const float dt = SAMPLING_TIME_S;
+    // Reflete no array global A (apenas posicoes variaveis - restante ja eh 0).
+    A[0 * STATE_SIZE + 3] = A03;
+    A[0 * STATE_SIZE + 4] = A04;
+    A[0 * STATE_SIZE + 5] = A05;
+    A[1 * STATE_SIZE + 4] = A14;
+    A[1 * STATE_SIZE + 5] = A15;
+    A[2 * STATE_SIZE + 4] = A24;
+    A[2 * STATE_SIZE + 5] = A25;
+    A[3 * STATE_SIZE + 4] = A34;
+    A[3 * STATE_SIZE + 5] = 0.0f;
+    A[4 * STATE_SIZE + 3] = A43;
+    A[4 * STATE_SIZE + 5] = A45;
+    A[5 * STATE_SIZE + 3] = 0.0f;
+    A[5 * STATE_SIZE + 4] = A54;
 
-    // Calcula A^2 para melhor aproximação da discretização
-    float A2[STATE_SIZE * STATE_SIZE] = {0};
-    MatrixOperations::matrixMultiply(A, A, A2, STATE_SIZE, STATE_SIZE, STATE_SIZE);
-    
-    // Ad = I + A*dt + (A^2*dt^2)/2 (aproximação de Taylor de 2ª ordem)
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < STATE_SIZE; j++) {
-            if (i == j) {
-                Ad[i * STATE_SIZE + j] = 1 + A[i * STATE_SIZE + j] * dt + 
-                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
-            } else {
-                Ad[i * STATE_SIZE + j] = A[i * STATE_SIZE + j] * dt + 
-                                       A2[i * STATE_SIZE + j] * dt * dt * 0.5f;
-            }
-        }
-    }
+    // ===== A^2 esparso: 14 entradas (Σ_k A[i,k]·A[k,j], k em {3,4,5}) =====
+    const float A2_03 = A04 * A43;
+    const float A2_04 = A34 + A05 * A54;
+    const float A2_05 = A04 * A45;
+    const float A2_13 = A14 * A43;
+    const float A2_14 = A15 * A54;
+    const float A2_15 = A14 * A45;
+    const float A2_23 = A24 * A43;
+    const float A2_24 = A25 * A54;
+    const float A2_25 = A24 * A45;
+    const float A2_33 = A34 * A43;
+    const float A2_35 = A34 * A45;
+    const float A2_44 = A43 * A34 + A45 * A54;
+    const float A2_53 = A54 * A43;
+    const float A2_55 = A54 * A45;
 
-    // Discretiza a matriz B com aproximação de segunda ordem: Bd = (I*dt + A*dt^2/2)*B = B*dt + A*B*dt^2/2
-    float AB[STATE_SIZE * CONTROL_SIZE] = {0};
-    MatrixOperations::matrixMultiply(A, B, AB, STATE_SIZE, STATE_SIZE, CONTROL_SIZE);
+    // ===== Ad = I + A*dt + A^2*dt^2/2 =====
+    memset(Ad, 0, sizeof(float) * STATE_SIZE * STATE_SIZE);
+    Ad[0 * STATE_SIZE + 0] = 1.0f;
+    Ad[1 * STATE_SIZE + 1] = 1.0f;
+    Ad[2 * STATE_SIZE + 2] = 1.0f;
+    Ad[3 * STATE_SIZE + 3] = 1.0f + A2_33 * dt2_2;
+    Ad[4 * STATE_SIZE + 4] = 1.0f + A2_44 * dt2_2;
+    Ad[5 * STATE_SIZE + 5] = 1.0f + A2_55 * dt2_2;
 
-    float dt2_over_2 = dt * dt * 0.5f;
+    Ad[0 * STATE_SIZE + 3] = A03 * dt + A2_03 * dt2_2;
+    Ad[0 * STATE_SIZE + 4] = A04 * dt + A2_04 * dt2_2;
+    Ad[0 * STATE_SIZE + 5] = A05 * dt + A2_05 * dt2_2;
+    Ad[1 * STATE_SIZE + 3] =            A2_13 * dt2_2;
+    Ad[1 * STATE_SIZE + 4] = A14 * dt + A2_14 * dt2_2;
+    Ad[1 * STATE_SIZE + 5] = A15 * dt + A2_15 * dt2_2;
+    Ad[2 * STATE_SIZE + 3] =            A2_23 * dt2_2;
+    Ad[2 * STATE_SIZE + 4] = A24 * dt + A2_24 * dt2_2;
+    Ad[2 * STATE_SIZE + 5] = A25 * dt + A2_25 * dt2_2;
+    Ad[3 * STATE_SIZE + 4] = A34 * dt;
+    Ad[3 * STATE_SIZE + 5] =            A2_35 * dt2_2;
+    Ad[4 * STATE_SIZE + 3] = A43 * dt;
+    Ad[4 * STATE_SIZE + 5] = A45 * dt;
+    Ad[5 * STATE_SIZE + 3] =            A2_53 * dt2_2;
+    Ad[5 * STATE_SIZE + 4] = A54 * dt;
 
-    for (int i = 0; i < STATE_SIZE; i++) {
-        for (int j = 0; j < CONTROL_SIZE; j++) {
-            int index = i * CONTROL_SIZE + j;
-            Bd[index] = B[index] * dt + AB[index] * dt2_over_2;
-        }
-    }
+    // ===== Bd = B*dt + A*B*dt^2/2; B esparso => (A*B)[i,j] = A[i,3+j]·(1/I_jj) =====
+    memset(Bd, 0, sizeof(float) * STATE_SIZE * CONTROL_SIZE);
+    Bd[0 * CONTROL_SIZE + 0] = A03 * inv_Ixx * dt2_2;
+    Bd[0 * CONTROL_SIZE + 1] = A04 * inv_Iyy * dt2_2;
+    Bd[0 * CONTROL_SIZE + 2] = A05 * inv_Izz * dt2_2;
+    Bd[1 * CONTROL_SIZE + 1] = A14 * inv_Iyy * dt2_2;
+    Bd[1 * CONTROL_SIZE + 2] = A15 * inv_Izz * dt2_2;
+    Bd[2 * CONTROL_SIZE + 1] = A24 * inv_Iyy * dt2_2;
+    Bd[2 * CONTROL_SIZE + 2] = A25 * inv_Izz * dt2_2;
+    Bd[3 * CONTROL_SIZE + 0] = inv_Ixx * dt;
+    Bd[3 * CONTROL_SIZE + 1] = A34 * inv_Iyy * dt2_2;
+    Bd[4 * CONTROL_SIZE + 0] = A43 * inv_Ixx * dt2_2;
+    Bd[4 * CONTROL_SIZE + 1] = inv_Iyy * dt;
+    Bd[4 * CONTROL_SIZE + 2] = A45 * inv_Izz * dt2_2;
+    Bd[5 * CONTROL_SIZE + 1] = A54 * inv_Iyy * dt2_2;
+    Bd[5 * CONTROL_SIZE + 2] = inv_Izz * dt;
 
-    // Atualiza o controlador SDRE com a nova matriz de estados
-    // (PID não usa matriz de estados, mas chamamos por compatibilidade)
-    // B1: Bd é recalculado a cada iteração (depende de A(x)); precisa propagar pro controller.
-    // Sem este setInputMatrix, SDRE usa Bd da inicialização (A=0) → modelo errado, K diverge.
+    // ===== Qd = Q*dt + (A^T·Q + Q·A)*dt^2/2; Q diagonal, simetrico =====
+    // (A^T·Q + Q·A)[i,j] = A[j,i]·Q[j,j] + Q[i,i]·A[i,j].
+    memset(Qd, 0, sizeof(float) * STATE_SIZE * STATE_SIZE);
+    Qd[0 * STATE_SIZE + 0] = Q_11 * dt;
+    Qd[1 * STATE_SIZE + 1] = Q_22 * dt;
+    Qd[2 * STATE_SIZE + 2] = Q_33 * dt;
+    Qd[3 * STATE_SIZE + 3] = Q_44 * dt;
+    Qd[4 * STATE_SIZE + 4] = Q_55 * dt;
+    Qd[5 * STATE_SIZE + 5] = Q_66 * dt;
+
+    const float q03 = Q_11 * A03 * dt2_2; // A[3,0]=0
+    const float q04 = Q_11 * A04 * dt2_2; // A[4,0]=0
+    const float q05 = Q_11 * A05 * dt2_2; // A[5,0]=0
+    const float q14 = Q_22 * A14 * dt2_2; // A[4,1]=0
+    const float q15 = Q_22 * A15 * dt2_2; // A[5,1]=0
+    const float q24 = Q_33 * A24 * dt2_2; // A[4,2]=0
+    const float q25 = Q_33 * A25 * dt2_2; // A[5,2]=0
+    const float q34 = (A43 * Q_55 + Q_44 * A34) * dt2_2;
+    const float q45 = (A54 * Q_66 + Q_55 * A45) * dt2_2;
+
+    Qd[0 * STATE_SIZE + 3] = q03; Qd[3 * STATE_SIZE + 0] = q03;
+    Qd[0 * STATE_SIZE + 4] = q04; Qd[4 * STATE_SIZE + 0] = q04;
+    Qd[0 * STATE_SIZE + 5] = q05; Qd[5 * STATE_SIZE + 0] = q05;
+    Qd[1 * STATE_SIZE + 4] = q14; Qd[4 * STATE_SIZE + 1] = q14;
+    Qd[1 * STATE_SIZE + 5] = q15; Qd[5 * STATE_SIZE + 1] = q15;
+    Qd[2 * STATE_SIZE + 4] = q24; Qd[4 * STATE_SIZE + 2] = q24;
+    Qd[2 * STATE_SIZE + 5] = q25; Qd[5 * STATE_SIZE + 2] = q25;
+    Qd[3 * STATE_SIZE + 4] = q34; Qd[4 * STATE_SIZE + 3] = q34;
+    Qd[4 * STATE_SIZE + 5] = q45; Qd[5 * STATE_SIZE + 4] = q45;
+
+    // ===== Rd = R*dt + (B^T·Q·B)*dt^3/3 — B esparso + Q diag => Rd diagonal =====
+    static const float dt3_over_3 = dt * dt * dt / 3.0f;
+    memset(Rd, 0, sizeof(float) * CONTROL_SIZE * CONTROL_SIZE);
+    Rd[0 * CONTROL_SIZE + 0] = R_11 * dt + (Q_44 * inv_Ixx * inv_Ixx) * dt3_over_3;
+    Rd[1 * CONTROL_SIZE + 1] = R_22 * dt + (Q_55 * inv_Iyy * inv_Iyy) * dt3_over_3;
+    Rd[2 * CONTROL_SIZE + 2] = R_33 * dt + (Q_66 * inv_Izz * inv_Izz) * dt3_over_3;
+
     if (CONTROLLER_TYPE == 0) {
         sdreController.setStateMatrix(Ad);
         sdreController.setInputMatrix(Bd);
+        sdreController.setCostMatrices(Qd, Rd);
     }
 }
 
