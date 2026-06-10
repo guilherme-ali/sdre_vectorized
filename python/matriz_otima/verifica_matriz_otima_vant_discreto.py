@@ -71,7 +71,7 @@ num_steps = int((t_span[1] - t_span[0]) / Ts) + 1
 t_eval = np.linspace(t_span[0], t_span[1], num_steps)
 
 # Valores dos parâmetros para testar
-amostras = 10
+amostras = 100
 extremidades = 1.0
 param1_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha1
 param2_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha2
