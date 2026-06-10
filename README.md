@@ -6,11 +6,11 @@ Controle de atitude de quadricóptero em **ESP32-S2** com **SDRE-LQR** (State-De
 
 - **Controle SDRE em tempo real** — ganhos K recalculados ciclo a ciclo a partir de A(x)
 - **Multiplos solvers DARE** — 7 algoritmos implementados em `lib/AUTOLQR/` (benchmark abaixo)
-- **Riccati em ponto fixo Q13.18** — caminho de produção do `"SDA"` ~2,7× mais rápido que `float`, com *fallback* automático em overflow (detalhes em `lib/AUTOLQR/`)
+- **Riccati em ponto fixo Q13.18** — método padrão `"SDA_FIXED"` (default de `computeGains()`), ~2,7× mais rápido que o SDA `float`; em overflow/saturação retorna `false` e mantém o ganho `K` do ciclo anterior. O SDA `float` (`"SDA"`) segue disponível como referência exata (detalhes em `lib/AUTOLQR/`)
 - **PID alternativo** — controlador PID compatível com a mesma interface, selecionável via flag
 - **Madgwick (AHRS)** — estimação de orientação a partir de MPU6050 (leitura crua ~1.8× + QMC5883L opcional)
 - **Butterworth digital** — filtro passa-baixa por eixo antes do AHRS (anti-aliasing em 200 Hz)
-- **Riccati desacoplada do ciclo** — modo **assíncrono** (FreeRTOS task, loop fixo a 200 Hz) ou **síncrono reordenado** (aplica K(x_{k−1}) e resolve K(x_k) *após* atuar), tirando a Riccati do caminho sensor→atuador
+- **Riccati desacoplada do ciclo** — modo **síncrono reordenado** (padrão: aplica K(x_{k−1}) e resolve K(x_k) *após* atuar, ao final do loop) ou **assíncrono** (FreeRTOS task, loop fixo a 200 Hz); em ambos a Riccati sai do caminho sensor→atuador
 - **Telemetria em RAM + LittleFS** — buffer circular de 1000 amostras, persistido em flash ao desarmar
 - **WiFi/UDP (CRTP)** — protocolo Crazyflie, compatível com o app **ESP-Drone** (Espressif)
 - **Failsafe de tilt** — desarma e trava motores em inclinação > 60° (zona singular `1/cos(pitch)`)
@@ -61,7 +61,7 @@ const bool DEBUG_MODE       = false; // true: prints detalhados; false: Serial P
 const bool PRINT_TELEMETRY  = false; // stream contínuo roll/pitch/yaw/p/q/r
 const bool USE_MAGNETOMETER = false; // 9-DOF (QMC5883L) ou 6-DOF (só accel+gyro)
 const int  CONTROLLER_TYPE  = 0;     // 0 = SDRE, 1 = PID
-const bool USE_ASYNC_SDRE   = true;  // true: Riccati em FreeRTOS task; false: síncrono
+const bool USE_ASYNC_SDRE   = false; // true: Riccati em FreeRTOS task; false: síncrono reordenado (padrão)
 ```
 
 ## Compilação
@@ -102,7 +102,9 @@ ESP32-S2 @ 240 MHz, sistema 6 estados × 3 controles, **800 000 execuções** so
 | SDA-Scaled     | 3,43 × 10⁻⁴               |
 | Iterativo      | — (referência)            |
 
-> **Recomendação:** **SDA (base)** — melhor balanço velocidade × precisão × robustez. Zero falhas em 800 k execuções, menor erro RMS (~10⁻⁷), pior caso a 8 750 μs cabe folgado no ciclo de controle a 80 Hz (12 500 μs).
+> **Recomendação:** **SDA (base)** — melhor balanço velocidade × precisão × robustez. Zero falhas em 800 k execuções, menor erro RMS (~10⁻⁷). A tabela acima é medida em `float`.
+>
+> **No firmware**, o caminho de produção é o `"SDA_FIXED"` (fixed-point Q13.18, ~3,2 ms) derivado do SDA base — default de `computeGains()` e necessário para o solver caber no loop síncrono de 5 ms (o SDA `float` de ~8,6 ms não cabe). O SDA `float` (`"SDA"`) permanece como referência exata e *fallback* manual.
 >
 > **ASDA** como alternativa quando previsibilidade temporal é crítica (σ de apenas 24,64 μs).
 >

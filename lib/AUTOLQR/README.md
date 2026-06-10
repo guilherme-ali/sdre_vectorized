@@ -4,7 +4,8 @@ Biblioteca otimizada para cálculo de ganhos LQR em tempo real, projetada para s
 
 ## 📋 Características
 
-- **7 métodos de solução DARE** implementados (SDA, SDA-ss, ASDA, SDA Scaled, ADDA, Van Dooren, Iterativo)
+- **Caminho de produção `SDA_FIXED`** (fixed-point Q13.18) — default de `computeGains()`, derivado do SDA base
+- **7 métodos de solução DARE em `float`** (SDA, SDA-ss, ASDA, SDA Scaled, ADDA, Van Dooren, Iterativo)
 - **Operações matriciais otimizadas** para sistemas de pequeno/médio porte (`MatrixOperations`)
 - **Warm-start** automático para o método iterativo (P anterior como inicial)
 - **Baixo consumo de memória** — alocação única no construtor, sem `new` em runtime
@@ -41,17 +42,26 @@ Sistema de teste: **6 estados × 3 controles**, **800 000 execuções** sob din�
 
 ### Descrição dos Métodos
 
-#### 1. SDA (Structure-preserving Doubling Algorithm) ⭐ **RECOMENDADO**
+#### 0. SDA_FIXED (SDA em ponto fixo Q13.18) ⭐ **PADRÃO DO FIRMWARE**
+```cpp
+lqr.computeGains();            // default = "SDA_FIXED"
+lqr.computeGains("SDA_FIXED"); // equivalente, explícito
+```
+- **Melhor para**: Execução em tempo real no ESP32-S2 (sem FPU) — **default de `computeGains()`**
+- **Características**: Mesma recorrência do SDA base, resolvida inteira em `int32` Q13.18 (~2,7× mais rápida)
+- **Precisão**: erro do `K` < 1 % no ganho dominante (pura quantização)
+- **Sem fallback automático**: em overflow/saturação ou matriz singular retorna `false`; quem chama
+  mantém o `K` do ciclo anterior. Para forçar o caminho `float` exato, selecionar `"SDA"`.
+- Ver [seção dedicada](#-caminho-rápido-sda-em-ponto-fixo-q1318).
+
+#### 1. SDA (Structure-preserving Doubling Algorithm) — referência `float`
 ```cpp
 lqr.computeGains("SDA");
 ```
-- **Melhor para**: Uso geral em tempo real — **escolha padrão para o projeto**
-- **Características**: Convergência quadrática, preserva estrutura simpléctica
+- **Melhor para**: Referência exata e *fallback* manual do `SDA_FIXED`
+- **Características**: Convergência quadrática, preserva estrutura simpléctica, aritmética `float` pura
 - **Complexidade**: O(n³) por iteração, ~8–10 iterações em regime
 - **Robustez comprovada**: 0 falhas em 800 000 execuções; menor erro RMS (9,36×10⁻⁷)
-- **⚡ Caminho rápido em ponto fixo**: ao chamar `"SDA"`, o solver tenta primeiro a
-  versão **fixed-point Q13.18** (~2,7× mais rápida) e cai automaticamente para o SDA `float`
-  acima em caso de overflow/saturação. Ver [seção dedicada](#-caminho-rápido-sda-em-ponto-fixo-q1318).
 
 #### 2. SDA-ss (SDA com Single Shift)
 ```cpp
@@ -151,8 +161,8 @@ void loop() {
     lqr.setStateMatrix(Ad);   // Matriz de estados discretizada
     lqr.setInputMatrix(Bd);   // Matriz de entrada discretizada
     
-    // 3. Calcular ganhos (SDA base = padrão do projeto)
-    lqr.computeGains("SDA");
+    // 3. Calcular ganhos (default = "SDA_FIXED", fixed-point Q13.18)
+    lqr.computeGains();
     
     // 4. Calcular ação de controle
     lqr.updateState(current_state);
@@ -192,8 +202,8 @@ public:
     bool setInputMatrix(const float* B);      // Matriz de entrada (n×m)
     bool setCostMatrices(const float* Q, const float* R);  // Matrizes de custo
     
-    // Cálculo de ganhos
-    bool computeGains(const char* method);    // "SDA", "ADDA", "ITERATIVE", etc.
+    // Cálculo de ganhos (default = "SDA_FIXED", fixed-point Q13.18)
+    bool computeGains(const char* method = "SDA_FIXED");  // "SDA", "ASDA", "ADDA", "ITERATIVE", ...
     void setGains(const float* K);            // Definir ganhos manualmente
     
     // Controle
@@ -216,6 +226,13 @@ public:
 ## ⚙️ Recomendações de Uso
 
 ### Para controle em tempo real (escolha padrão do projeto)
+```cpp
+// SDA_FIXED (default): fixed-point Q13.18, ~3.2 ms, erro do K < 1%.
+// Em overflow/saturação retorna false e o ganho do ciclo anterior é mantido.
+lqr.computeGains();
+```
+
+### Referência exata em float (fallback manual do SDA_FIXED)
 ```cpp
 // SDA base: 0 falhas em 800k execuções, pior caso 8750 us, erro RMS 9.36e-7
 lqr.computeGains("SDA");
@@ -242,16 +259,18 @@ dominado pelas 8 multiplicações 6×6 + inversão por iteração. Duas otimiza�
 ### 1. SDA inteiro em ponto fixo Q13.18
 
 `computeGainMatrixSDA_Fixed()` resolve a DARE inteira em **`int32` ponto fixo** (formato **Q13.18**:
-13 bits inteiros = ±8192, 18 fracionários ≈ resolução 3,8×10⁻⁶). É o caminho que `computeGains("SDA")`
-tenta primeiro.
+13 bits inteiros = ±8192, 18 fracionários ≈ resolução 3,8×10⁻⁶). É o método selecionado por
+`computeGains("SDA_FIXED")` — e o **default** de `computeGains()`.
 
 - **~2,7× mais rápido** que o SDA `float` (matmuls inteiros ≈ 4,4×; inversão ≈ soft-float).
 - **Erro do `K` < 1 %** no ganho dominante — e o erro é **pura quantização** (não amplificado pelo
   condicionamento da Riccati; cai pela metade a cada bit fracionário a mais).
 - **Formato escolhido pelo range real** do problema (pico ≈ 2980 nas matrizes do SDA): Q13.18 dá
   margem 2,7× sobre esse pico, importante porque o SDRE varia as matrizes com o estado.
-- **Fallback automático**: se houver overflow/saturação (flag interna) ou matriz singular no domínio
-  fixed-point, retorna `false` e `computeGains("SDA")` recai no SDA `float` (exato) naquele ciclo.
+- **Sem fallback automático**: se houver overflow/saturação (flag interna) ou matriz singular no domínio
+  fixed-point, `computeGainMatrixSDA_Fixed()` retorna `false` e `computeGains()` propaga `false` sem
+  recalcular. O chamador (ex.: `main.cpp`) então **mantém o `K` do ciclo anterior**. Para forçar o
+  caminho `float` exato, chamar `computeGains("SDA")`.
 
 ### 2. Kernel de multiplicação com saída simétrica
 
@@ -260,8 +279,9 @@ computa só o triângulo superior (21 de 36 elementos em 6×6) e espelha. Usado 
 SDA cujo produto é provadamente simétrico (identidade *push-through*: $W G_k$ e $H_k W$ são simétricas),
 economizando ~42 % nessas matmuls. **Válido apenas quando o chamador garante a simetria do resultado.**
 
-> Os benchmarks publicados (tabela acima, ~8,6 ms) referem-se ao SDA **`float`** — que continua como
-> caminho de *fallback*. O caminho de produção atual (`"SDA"` → fixed-point Q13.18) roda em ~3,2 ms.
+> Os benchmarks publicados (tabela acima, ~8,6 ms) referem-se ao SDA **`float`** (`"SDA"`) — que serve
+> de referência exata e *fallback* manual. O caminho de produção atual (`"SDA_FIXED"`, fixed-point
+> Q13.18, default de `computeGains()`) roda em ~3,2 ms.
 
 ## 🔬 Detalhes de Implementação
 
