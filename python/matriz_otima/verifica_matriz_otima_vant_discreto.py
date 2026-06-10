@@ -31,16 +31,16 @@ x0 = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 # Matrizes de ponderação para a função de custo
 Q = np.diag(
     [
-        1.0 / ((10.0 * 10 * np.pi / 180.0) ** 2),  # p
-        1.0 / ((10.0 * 10 * np.pi / 180.0) ** 2),  # q
-        1.0 / ((20.0 * 10 * np.pi / 180.0) ** 2),  # r
-        1.0 / ((10.0 * np.pi / 180.0) ** 2),  # phi
-        1.0 / ((10.0 * np.pi / 180.0) ** 2),  # theta
-        1.0 / ((20.0 * np.pi / 180.0) ** 2),  # psi
+        1.0 / ((300.0 * np.pi / 180.0) ** 2),  # p
+        1.0 / ((300.0 * np.pi / 180.0) ** 2),  # q
+        1.0 / ((200.0 * np.pi / 180.0) ** 2),  # r
+        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # phi
+        1.0 / ((45.0 * np.pi / 180.0) ** 2),  # theta
+        1.0 / ((90.0 * np.pi / 180.0) ** 2),  # psi
     ]
 )
-max_tau_roll = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA
-max_tau_pitch = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA
+max_tau_roll = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA / 2
+max_tau_pitch = 2 * b_coef * L_arm * MAX_OMEGA * MAX_OMEGA / 2
 max_tau_yaw = 2 * d_coef * MAX_OMEGA * MAX_OMEGA
 
 R = np.diag(
@@ -66,16 +66,16 @@ B = np.array(
 
 # Parâmetros de simulação
 t_span = [0, 1]
-Ts = 0.02  # Período de amostragem (20 ms, igual ao main.cpp)
+Ts = 0.0051  # Período de amostragem (20 ms, igual ao main.cpp)
 num_steps = int((t_span[1] - t_span[0]) / Ts) + 1
 t_eval = np.linspace(t_span[0], t_span[1], num_steps)
 
 # Valores dos parâmetros para testar
 amostras = 10
 extremidades = 1.0
-param1_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha1
-param2_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha2
-param3_values = np.linspace(-0, extremidades, amostras)  # Parâmetro alpha3
+param1_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha1
+param2_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha2
+param3_values = np.linspace(-extremidades, extremidades, amostras)  # Parâmetro alpha3
 
 # --- Geração do ruído para simular vento ---
 # Configuração do ruído
