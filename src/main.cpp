@@ -170,7 +170,7 @@ float accel_offset_y = -0.148659f;
 float accel_offset_z =  0.018737f;
 float gyro_offset_x  = -0.007760f;
 float gyro_offset_y  =  0.017851f;
-float gyro_offset_z  =  0.007761f;
+float gyro_offset_z  =  0.011061f;
 
 // ===== Calibracao QMC5883L (obtida via test/calibrate_magnetometer.cpp) =====
 const float MAG_OFFSET_X =  26.5f;   // Hard-iron
@@ -687,8 +687,8 @@ void loop(){
     float avgTime = (loopCount > 0) ? ((float)totalTime / loopCount) : 0.0f;
     
     if (PRINT_TELEMETRY) {
-        Serial.printf("Roll:%.2f,Pitch:%.2f,Yaw:%.2f,P:%.2f,Q:%.2f,R:%.2f\n", 
-                      roll * RAD_TO_DEG, pitch * RAD_TO_DEG, yaw * RAD_TO_DEG, 
+        Serial.printf(">roll:%.2f\n>pitch:%.2f\n>yaw:%.2f\n>p:%.2f\n>q:%.2f\n>r:%.2f\n",
+                      roll * RAD_TO_DEG, pitch * RAD_TO_DEG, yaw * RAD_TO_DEG,
                       p * RAD_TO_DEG, q * RAD_TO_DEG, r * RAD_TO_DEG);
     }
 
