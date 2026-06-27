@@ -96,7 +96,10 @@ COLS = [
 ]
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-DEFAULT_LOG = LOG_DIR / "device-monitor-260602-174243.log"
+DEFAULT_LOG = LOG_DIR / "device-monitor-260602-211127.log"
+DEFAULT_LOG = (
+    LOG_DIR / "device-monitor-260602-174243.log"
+)  # melhor voo (excitação suficiente)
 # Logs anteriores a 26-05-15 10:30 usam hélice 45mm / b antigo (git 188677b)
 MIN_LOG_STAMP = ("260515", "103000")
 
