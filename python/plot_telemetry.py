@@ -249,16 +249,6 @@ def fig_attitude(df: pd.DataFrame, title_prefix: str) -> plt.Figure:
     ax.legend(fontsize=8, loc="upper right")
     ax.set_title("Taxas Angulares (corpo)", fontsize=9)
 
-    # Marcador de crash: último ponto da fase de voo com gyro >300 dps
-    gyro_max = df[["p_dps","q_dps","r_dps"]].abs().max(axis=1)
-    crash_mask = df["flying"] & (gyro_max > 300)
-    if crash_mask.any():
-        t_crash = t[crash_mask].iloc[0]
-        for ax in axes:
-            ax.axvline(t_crash, color="red", lw=1.2, ls=":", alpha=0.7, label="_crash")
-        axes[0].annotate("saturação\ngyro", xy=(t_crash, axes[0].get_ylim()[1]*0.8),
-                         color="red", fontsize=7, ha="left")
-
     fig.tight_layout()
     return fig
 
@@ -357,9 +347,6 @@ def fig_vibration(df: pd.DataFrame, title_prefix: str) -> plt.Figure:
         ax.set_xlabel("Freq (Hz)")
         ax.set_ylabel("(°/s)²/Hz")
         ax.set_xlim(0, fs/2)
-        # Marca freq de loop de controle
-        ax.axvline(1.0/0.02, color="k", lw=0.8, ls="--", alpha=0.5, label="50 Hz loop")
-        ax.legend(fontsize=7)
 
     # Histograma de Δu (variação amostral dos torques) — revela chattering
     ax_hist = fig.add_subplot(gs[1, :])
