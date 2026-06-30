@@ -7,7 +7,7 @@ updateSystemMatrix() em src/main.cpp):
 
     Ixx·dp/dt = (Iyy-Izz)·q·r - Ir·q·ω_r + τ_roll
     Iyy·dq/dt = (Izz-Ixx)·p·r + Ir·p·ω_r + τ_pitch
-    Izz·dr/dt = (Ixx-Iyy)·p·q - Ir·dω_r/dt + τ_yaw
+    Izz·dr/dt = (Ixx-Iyy)·p·q + τ_yaw
 
 TORQUES via matriz de alocação física (a mesma comentada em
 lib/utils/utils.cpp::calculateMotorOmegaSq):
@@ -43,11 +43,11 @@ ESTRATÉGIA DE IDENTIFICAÇÃO:
     b (MOTOR_B_COEFF) foi MEDIDO na bancada -> ancora a escala absoluta.
     - Roll : dp = a·τ_roll (+ c·p + c0)  -> Ixx = 1/a   (2 modelos = bracket)
     - Pitch: dq = a·τ_pitch (+ c·q + c0) -> Iyy = 1/a
-    - Yaw  : dr = cs·s_yaw + cw·dω_r/dt + c0
-             cs = d/Izz   e   cw = -Ir/Izz
+    - Yaw  : dr = cs·s_yaw + c0
+             cs = d/Izz
     - Izz  = ratio·(Ixx+Iyy)/2  (âncora geométrica, validada por Ir)
     - d    = cs·Izz   (corrige MOTOR_D_COEFF)
-    - Ir   = -cw·Izz  (cross-check com o valor atual do firmware)
+    - Ir   = valor fixo do firmware (não estimável pela nova eq de yaw)
 
 USO:
     python identify_params.py                        # usa o log padrão (melhor voo)
@@ -311,7 +311,7 @@ def fit_axes(filt: dict, mask: np.ndarray):
         X1 = np.column_stack([filt[tq][m], filt["one"][m]])
         X2 = np.column_stack([filt[tq][m], filt[rate][m], filt["one"][m]])
         out[ax] = (ols(filt[dy][m], X1), ols(filt[dy][m], X2))
-    Xy = np.column_stack([filt["s_yaw"][m], filt["domega_r"][m], filt["one"][m]])
+    Xy = np.column_stack([filt["s_yaw"][m], filt["one"][m]])
     out["yaw"] = ols(filt["dr"][m], Xy)
     return out
 
@@ -539,12 +539,16 @@ def main():
 
     ty, sy, r2yaw, _ = fits["yaw"]
     d_over_Izz = ty[0]
-    Ir_over_Izz = -ty[1]
+    
+    # A equação da imagem tem 0 no termo de inércia do rotor para o eixo yaw.
+    # Portanto, não podemos estimar Ir por essa rota. Assumiremos o valor do firmware.
+    Ir = FW["Ir"]
+    Ir_err = 0.0
+    Ir_over_Izz = Ir / Izz
+    
     d = d_over_Izz * Izz
     d_err = abs(sy[0] * Izz) + abs(d_over_Izz * Izz_err)
-    Ir = Ir_over_Izz * Izz
-    Ir_err = abs(sy[1] * Izz) + abs(Ir_over_Izz * Izz_err)
-    Izz_via_Ir_fw = FW["Ir"] / Ir_over_Izz if Ir_over_Izz > 0 else np.nan
+    Izz_via_Ir_fw = np.nan
 
     print("\n" + "=" * 74)
     print(
@@ -574,7 +578,6 @@ def main():
         f"Iyy: [{min(Iyy1,Iyy2):.3e}, {max(Iyy1,Iyy2):.3e}]"
     )
     print(f"  d/Izz  = {d_over_Izz:+.3e} ± {sy[0]:.1e}  [1/(m·s²)·...]")
-    print(f"  Ir/Izz = {Ir_over_Izz:+.3e} ± {sy[1]:.1e}")
     print(f"  d/b    = {d/B_COEFF:.4f} m   (firmware usa 0.05)")
     Izz_geo = args.izz_ratio * (Ixx + Iyy) / 2.0
     print(
@@ -602,7 +605,7 @@ def main():
         panels = [
             ("roll", "dp", fits["roll"][0][0], ["tau_roll", "one"]),
             ("pitch", "dq", fits["pitch"][0][0], ["tau_pitch", "one"]),
-            ("yaw", "dr", fits["yaw"][0], ["s_yaw", "domega_r", "one"]),
+            ("yaw", "dr", fits["yaw"][0], ["s_yaw", "one"]),
         ]
         for ax, (axis, ykey, theta, xkeys) in zip(axes, panels):
             X = np.column_stack([cat[k] for k in xkeys])
