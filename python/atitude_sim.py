@@ -6,10 +6,10 @@ import matplotlib.animation as animation
 # ==========================================
 # 1. PARÂMETROS DO DRONE E LIMITES FÍSICOS
 # ==========================================
-Ixx = 16.57e-6
-Iyy = 13.57e-6
-Izz = 29.80e-6
-Ir = 1.02e-7
+Ixx = 44.56e-6
+Iyy = 42.98e-6
+Izz = 78.79e-6
+Ir = 5.196e-08
 m = 0.0469  # 46.9g
 g = 9.80665
 dt_control = 0.005  # Loop de controle (200Hz) — equivale ao SAMPLING_TIME_S do main.cpp
@@ -27,14 +27,14 @@ SENSOR_DELAY_S = 0.0015  # Atraso de leitura do sensor em segundos (configuráve
 # 3 = Estudo Async: compara 3 controladores (SDRE sync / SDRE async / LQR fixo)
 #                   em manobra agressiva, mede quanto async preserva o SDRE
 # ==========================================
-SIM_MODE = 1
+SIM_MODE = 2
 
 # Modo 2 — atraso de estado entre estimativa disponível e aplicação do controle
-PIPELINE_STATE_DELAY_S = 0.010  # 10ms (configurável)
+PIPELINE_STATE_DELAY_S = 0.00  # 10ms (configurável)
 DT_SYNC_CYCLE = 0.0125  # duração total do ciclo síncrono (sensor+filtro+SDRE+apply)
 
 # Parâmetros Físicos dos Motores (Do main.cpp)
-b_coeff = 2.94e-8  # Coeficiente de Empuxo
+b_coeff = 2.98e-8  # Coeficiente de Empuxo
 d_coeff = 0.05 * b_coeff  # Coeficiente de Arrasto
 L_arm = 0.060  # 60mm
 L_eff = L_arm * np.sin(np.pi / 4)  # Braço efetivo para config em 'X'
